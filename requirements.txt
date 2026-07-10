@@ -44,7 +44,6 @@ numpy==1.26.4
 openpyxl==3.1.5
 packaging==24.1
 pandas==2.2.1
-pillow==10.4.0
 plotly==5.20.0
 propcache==0.3.2
 protobuf==7.35.1
