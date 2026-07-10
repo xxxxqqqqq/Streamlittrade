@@ -34,7 +34,6 @@ jsonpath==0.82.2
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kiwisolver==1.4.5
-lxml==6.0.0
 MarkupSafe==3.0.2
 matplotlib==3.8.3
 mini-racer==0.12.4
