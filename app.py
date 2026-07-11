@@ -461,8 +461,14 @@ def plot_equity(equity_series):
 
 
 def plot_kline_with_signals(data, trades_df):
-    """K线图与买卖点（与回撤曲线风格统一，浅色背景）"""
-    fig = go.Figure()
+    """K线图与买卖点（含成交量副图），浅色背景"""
+    # 创建子图：2行1列，共享X轴
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.05,
+                        row_heights=[0.7, 0.3],
+                        subplot_titles=('', ''))  # 子图标题留空，用整体title
+
+    # ---- 上子图：K线 ----
     fig.add_trace(go.Candlestick(
         x=data.index,
         open=data['open'],
@@ -474,9 +480,9 @@ def plot_kline_with_signals(data, trades_df):
         increasing_fillcolor='#e74c3c',
         decreasing_line_color='#2ecc71',
         decreasing_fillcolor='#2ecc71'
-    ))
+    ), row=1, col=1)
 
-    # 买卖点
+    # ---- 上子图：买卖点 ----
     if trades_df is not None and not trades_df.empty:
         buys = trades_df[trades_df['action'] == 'BUY']
         if not buys.empty:
@@ -487,7 +493,7 @@ def plot_kline_with_signals(data, trades_df):
                             color='white',
                             line=dict(color='#e74c3c', width=1.5)),
                 hovertemplate='<b>买入</b><br>日期: %{x|%Y-%m-%d}<br>价格: %{y:.2f}<extra></extra>'
-            ))
+            ), row=1, col=1)
         sells = trades_df[trades_df['action'] == 'SELL']
         if not sells.empty:
             fig.add_trace(go.Scatter(
@@ -497,26 +503,68 @@ def plot_kline_with_signals(data, trades_df):
                             color='white',
                             line=dict(color='#2ecc71', width=1.5)),
                 hovertemplate='<b>卖出</b><br>日期: %{x|%Y-%m-%d}<br>价格: %{y:.2f}<extra></extra>'
-            ))
+            ), row=1, col=1)
 
+    # ---- 下子图：成交量（红涨绿跌） ----
+    colors = ['#e74c3c' if close >= open else '#2ecc71' 
+              for close, open in zip(data['close'], data['open'])]
+    fig.add_trace(go.Bar(
+        x=data.index,
+        y=data['volume'],
+        name='成交量',
+        marker=dict(color=colors),
+        hovertemplate='<b>成交量</b><br>日期: %{x|%Y-%m-%d}<br>成交: %{y:,.0f}<extra></extra>'
+    ), row=2, col=1)
+
+    # ---- 全局布局 ----
     fig.update_layout(
-        title='K线图与买卖点',
-        height=500,
-        margin=dict(l=40, r=40, t=80, b=40),
-        xaxis=dict(
-            rangeslider_visible=False,
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1个月", step="month", stepmode="backward"),
-                    dict(count=3, label="3个月", step="month", stepmode="backward"),
-                    dict(count=6, label="6个月", step="month", stepmode="backward"),
-                    dict(count=1, label="1年", step="year", stepmode="backward"),
-                    dict(step="all", label="全部")
-                ])
-            )
-        )
+        title=dict(
+            text='K线图与买卖点',
+            x=0.5,
+            xanchor='center',
+            y=0.98,
+            yanchor='top'
+        ),
+        height=600,  # 总高度略增，给成交量留空间
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            bgcolor='rgba(255,255,255,0.8)'
+        ),
+        margin=dict(l=40, r=40, t=60, b=40),
+        hovermode='x unified'
     )
-    fig.update_yaxes(title_text="价格")
+
+    # ---- X轴设置（仅底部子图显示时间选择器） ----
+    fig.update_xaxes(
+        row=2, col=1,
+        rangeslider_visible=False,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=1, label="1个月", step="month", stepmode="backward"),
+                dict(count=3, label="3个月", step="month", stepmode="backward"),
+                dict(count=6, label="6个月", step="month", stepmode="backward"),
+                dict(count=1, label="1年", step="year", stepmode="backward"),
+                dict(step="all", label="全部")
+            ]),
+            bgcolor='#e9ecef',
+            activecolor='#007bff',
+            font_color='black',
+            borderwidth=1
+        ),
+        title_text="日期"
+    )
+    # 上子图X轴不显示标签，只显示刻度（但共享X轴后，会自动隐藏标签）
+    fig.update_xaxes(row=1, col=1, showticklabels=False)
+
+    # ---- Y轴标题 ----
+    fig.update_yaxes(title_text="价格", row=1, col=1)
+    fig.update_yaxes(title_text="成交量", row=2, col=1)
+
     return fig
 
 def plot_drawdown(equity_series):
