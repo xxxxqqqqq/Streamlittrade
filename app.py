@@ -461,12 +461,12 @@ def plot_equity(equity_series):
 
 
 def plot_kline_with_signals(data, trades_df):
-    """K线图与买卖点（含成交量副图），浅色背景"""
+    """K线图与买卖点（含成交量副图），浅色背景，支持拖拽缩放"""
     # 创建子图：2行1列，共享X轴
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05,
                         row_heights=[0.7, 0.3],
-                        subplot_titles=('', ''))  # 子图标题留空，用整体title
+                        subplot_titles=('', ''))
 
     # ---- 上子图：K线 ----
     fig.add_trace(go.Candlestick(
@@ -525,7 +525,7 @@ def plot_kline_with_signals(data, trades_df):
             y=0.98,
             yanchor='top'
         ),
-        height=600,  # 总高度略增，给成交量留空间
+        height=600,
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -539,7 +539,7 @@ def plot_kline_with_signals(data, trades_df):
         hovermode='x unified'
     )
 
-    # ---- X轴设置（仅底部子图显示时间选择器） ----
+    # ---- X轴设置（底部子图显示时间选择器） ----
     fig.update_xaxes(
         row=2, col=1,
         rangeslider_visible=False,
@@ -558,12 +558,20 @@ def plot_kline_with_signals(data, trades_df):
         ),
         title_text="日期"
     )
-    # 上子图X轴不显示标签，只显示刻度（但共享X轴后，会自动隐藏标签）
+    # 上子图X轴不显示标签
     fig.update_xaxes(row=1, col=1, showticklabels=False)
 
-    # ---- Y轴标题 ----
+    # ---- Y轴设置 ----
+    # 上子图：显示价格
     fig.update_yaxes(title_text="价格", row=1, col=1)
-    fig.update_yaxes(title_text="成交量", row=2, col=1)
+    # 下子图：隐藏Y轴标题和刻度（不显示价格/数值）
+    fig.update_yaxes(
+        title_text="",               # 清空标题
+        showticklabels=False,        # 隐藏刻度标签
+        showgrid=False,              # 隐藏网格线（可选）
+        zeroline=False,              # 隐藏零线（可选）
+        row=2, col=1
+    )
 
     return fig
 
