@@ -9,7 +9,74 @@ import time
 import warnings
 import baostock as bs
 
+try:
+    from streamlit_ace import st_ace
+    ACE_AVAILABLE = True
+except ImportError:
+    ACE_AVAILABLE = False
+
+# ============================================================
+# 0. 引入deepseek用于生成自定义策略
+# ============================================================
+
+import os
+from dotenv import load_dotenv
+load_dotenv()
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
 warnings.filterwarnings('ignore')
+
+from openai import OpenAI
+
+def get_deepseek_client():
+    """初始化 DeepSeek 客户端"""
+    return OpenAI(
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com"
+    )
+
+def call_deepseek(messages, model="deepseek-chat", temperature=0.3):
+    """
+    调用 DeepSeek API
+    messages: 对话历史列表 [{"role": "user", "content": "..."}, ...]
+    """
+    client = get_deepseek_client()
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=2000
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"API 调用失败: {e}"
+
+import re
+
+def extract_code(text):
+    """从 DeepSeek 返回的文本中提取 Python 代码"""
+    # 匹配 ```python ... ``` 或 ``` ... ```
+    pattern = r"```(?:python)?\s*\n(.*?)```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+    # 如果没有代码块标记，直接返回原文
+    return text.strip()
+
+def validate_strategy_code(code):
+    """验证生成的代码是否符合规范"""
+    try:
+        # 尝试编译
+        compile(code, "<string>", "exec")
+        # 检查是否包含 generate_signal 函数
+        if "def generate_signal" not in code:
+            return False, "未找到 generate_signal 函数"
+        if "return" not in code:
+            return False, "函数缺少 return 语句"
+        return True, "代码验证通过"
+    except SyntaxError as e:
+        return False, f"语法错误: {e}"
 
 # ============================================================
 # 1. 数据获取（基于 Baostock，带缓存）
@@ -591,7 +658,7 @@ def plot_drawdown(equity_series):
 
 st.set_page_config(page_title="量化回测系统", layout="wide")
 st.title("📈 量化策略回测系统")
-st.markdown("支持右侧趋势策略 & V型反转策略，数据来自 Baostock")
+st.markdown("支持右侧趋势策略 & V型反转策略 & 自定义交易策略，数据来自 Baostock")
 
 with st.sidebar:
     st.header("⚙️ 参数设置")
@@ -601,7 +668,73 @@ with st.sidebar:
     start_str = start_date.strftime("%Y%m%d")
     end_str = end_date.strftime("%Y%m%d")
 
-    strategy_type = st.selectbox("选择策略", ["右侧趋势策略", "V型反转策略"])
+    strategy_type = st.selectbox(
+        "选择策略",
+        ["右侧趋势策略", "V型反转策略", "自定义策略", "🤖 AI 生成策略"]
+    )
+
+    if strategy_type == "🤖 AI 生成策略":
+        st.subheader("🤖 用自然语言描述你的策略")
+        st.markdown("""
+        例如：
+        - "当5日均线上穿20日均线时买入，跌破60日均线时卖出"
+        - "RSI低于30时买入，高于70时卖出"
+        - "MACD金叉且成交量放大时买入"
+        """)
+
+        # 显示聊天界面（上面的代码）
+        # ...
+
+        # 显示生成的代码（可编辑）
+        if st.session_state.generated_code:
+            st.subheader("📝 生成的策略代码")
+            edited_code = st.text_area(
+                "你可以直接编辑下方的代码（可选）",
+                value=st.session_state.generated_code,
+                height=300
+            )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ 使用此策略回测"):
+                    # 验证并保存代码
+                    is_valid, msg = validate_strategy_code(edited_code)
+                    if is_valid:
+                        st.session_state.custom_strategy_code = edited_code
+                        st.success("策略已保存，点击「运行回测」执行")
+                    else:
+                        st.error(f"代码验证失败: {msg}")
+            with col2:
+                if st.button("🔄 重新生成"):
+                    st.session_state.generated_code = ""
+                    st.rerun()
+
+    if strategy_type == "自定义策略":
+        st.subheader("✏️ 编辑策略代码")
+        st.markdown(
+            "请编写一个名为 `generate_signal` 的函数，接收 `df` 参数，返回包含 `signal` 和 `signal_type` 列的 DataFrame。")
+
+        # 提供一个默认模板
+        default_code = """def generate_signal(df):
+        import pandas as pd
+        import numpy as np
+        data = df.copy()
+        # 示例：简单的双均线金叉策略
+        data['MA5'] = data['close'].rolling(5).mean()
+        data['MA20'] = data['close'].rolling(20).mean()
+        data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+        data['signal_type'] = 'custom'
+        # 注意：必须至少包含信号前一天的数据，建议保留所有行，只设置信号列
+        return data
+    """
+        # 使用 st_ace 提供更好的编辑体验（若已安装）
+        try:
+            from streamlit_ace import st_ace
+
+            user_code = st_ace(value=default_code, language='python', theme='monokai', keybinding='vscode',
+                               font_size=14, height=400)
+        except ImportError:
+            user_code = st.text_area("策略代码", value=default_code, height=400)
 
     st.subheader("策略参数")
     if strategy_type == "右侧趋势策略":
@@ -634,10 +767,54 @@ if run_btn:
         st.stop()
 
     with st.spinner("生成策略信号..."):
-        if strategy_type == "右侧趋势策略":
-            df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
-        else:
-            df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, vol_ratio)
+        if strategy_type == "🤖 AI 生成策略":
+            # 使用 AI 生成的代码
+            code = st.session_state.get("custom_strategy_code", "")
+            if not code:
+                st.error("请先生成或输入策略代码")
+                st.stop()
+
+            # 动态执行
+            local_namespace = {}
+            try:
+                exec(code, {}, local_namespace)
+                if 'generate_signal' not in local_namespace:
+                    st.error("未找到 generate_signal 函数")
+                    st.stop()
+                generate_signal = local_namespace['generate_signal']
+                df_signal = generate_signal(df)
+                # 验证输出
+                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列")
+                    st.stop()
+                df_signal['signal'] = df_signal['signal'].astype(bool)
+            except Exception as e:
+                st.error(f"策略执行出错: {e}")
+                st.stop()
+        if strategy_type == "自定义策略":
+            try:
+                local_namespace = {}
+                exec(user_code, {}, local_namespace)
+                if 'generate_signal' not in local_namespace:
+                    st.error("未找到名为 'generate_signal' 的函数。")
+                    st.stop()
+                generate_signal = local_namespace['generate_signal']
+                df_signal = generate_signal(df)
+                if not isinstance(df_signal, pd.DataFrame):
+                    st.error("策略函数必须返回 DataFrame。")
+                    st.stop()
+                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列。")
+                    st.stop()
+                df_signal['signal'] = df_signal['signal'].astype(bool)
+            except Exception as e:
+                st.error(f"策略代码执行出错: {e}")
+                st.stop()
+        else :
+            if strategy_type == "右侧趋势策略":
+                df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
+            else:
+                df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, vol_ratio)
 
     with st.spinner("运行回测..."):
         max_hold = 20 if strategy_type == "V型反转策略" else 999
