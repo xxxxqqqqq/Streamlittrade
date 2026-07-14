@@ -1,25 +1,166 @@
+# ============================================================
+# 0. 导入依赖
+# ============================================================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-import os
 import time
 import warnings
 import baostock as bs
+import re
+import os
+import requests
+from dotenv import load_dotenv
+
+# 尝试导入增强代码编辑器（可选）
+try:
+    from streamlit_ace import st_ace
+    ACE_AVAILABLE = True
+except ImportError:
+    ACE_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
 
 # ============================================================
-# 1. 数据获取（基于 Baostock，带缓存）
+# 1. 配置与常量
+# ============================================================
+load_dotenv()  # 加载 .env 文件（若有）
+
+# DeepSeek API 密钥（将由用户在界面上输入，不写死在代码中）
+# 此处仅声明变量，实际值从 st.session_state 获取
+DEEPSEEK_API_KEY = ""
+
+# DeepSeek 系统提示词（固定指令，用于引导 AI 生成标准策略代码）
+SYSTEM_PROMPT = """你是一个量化交易策略代码生成助手。你的任务是根据用户的自然语言描述，生成符合以下规范的 Python 策略代码。
+
+【代码规范】
+1. 必须定义一个名为 `generate_signal` 的函数
+2. 函数接收一个参数 `df`（Pandas DataFrame，包含 open, high, low, close, volume 列）
+3. 函数必须返回一个 DataFrame，包含以下列：
+   - 'signal': 布尔类型，True 表示买入信号
+   - 'signal_type': 字符串，固定为 'custom'
+4. 可以在函数内部计算任何技术指标（MA, MACD, RSI, KDJ 等）
+5. 代码需要包含必要的 import 语句（如 import pandas as pd, import numpy as np）
+
+【输出要求 - 极其重要】
+- 只输出 Python 纯代码，不要使用任何 Markdown 代码块标记（如 ```python 或 ```）
+- 不要添加任何解释文字、注释（除代码内必要的注释外）
+- 输出内容必须从 `import` 或 `def` 直接开始，以 `return data` 结束
+- 代码必须可以直接复制并运行，无语法错误
+
+【示例】
+用户说："当5日均线上穿20日均线时买入"
+你应输出：
+import pandas as pd
+import numpy as np
+
+def generate_signal(df):
+    data = df.copy()
+    data['MA5'] = data['close'].rolling(5).mean()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+    data['signal_type'] = 'custom'
+    return data
+
+现在，请根据用户的策略描述生成代码，严格遵守纯代码输出要求。"""
+
+
+# ============================================================
+# 2. DeepSeek API 工具函数
 # ============================================================
 
+def call_deepseek(messages, model="deepseek-chat", temperature=0.3, max_tokens=2000):
+    """
+    调用 DeepSeek API 生成策略代码
+    使用 requests 直接调用，避免 openai 库的编码问题
+    :param messages: 对话消息列表
+    :param model: 模型名称
+    :param temperature: 温度参数
+    :param max_tokens: 最大输出 token 数
+    :return: 生成的文本或错误信息
+    """
+    api_key = st.session_state.get("deepseek_api_key", "")
+    if not api_key:
+        return "[ERROR] 请先在侧边栏设置 DeepSeek API Key"
+
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[ERROR] API 调用失败: {e}"
+
+
+def extract_code(text):
+    """
+    从 DeepSeek 返回的文本中提取纯 Python 代码
+    支持去除 Markdown 代码块标记
+    """
+    # 匹配 ```python ... ``` 或 ``` ... ```
+    pattern = r"```(?:python)?\s*\n(.*?)```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        code = matches[0].strip()
+        # 如果提取的代码中仍包含 def generate_signal，直接返回
+        if "def generate_signal" in code:
+            return code
+        else:
+            # 否则尝试从 def 开始截取
+            if "def generate_signal" in text:
+                start = text.find("def generate_signal")
+                code = text[start:].strip()
+                if code.endswith("```"):
+                    code = code[:-3].strip()
+                return code
+    # 如果没有代码块标记，直接查找 def
+    if "def generate_signal" in text:
+        start = text.find("def generate_signal")
+        code = text[start:].strip()
+        if code.endswith("```"):
+            code = code[:-3].strip()
+        return code
+    return text.strip()
+
+
+def validate_strategy_code(code):
+    """
+    验证生成的代码是否符合基础规范
+    检查语法和是否包含必要的函数
+    :return: (is_valid, message)
+    """
+    try:
+        compile(code, "<string>", "exec")
+        if "def generate_signal" not in code:
+            return False, "未找到 generate_signal 函数"
+        if "return" not in code:
+            return False, "函数缺少 return 语句"
+        return True, "代码验证通过"
+    except SyntaxError as e:
+        return False, f"语法错误: {e}"
+
+
+# ============================================================
+# 3. 数据获取（基于 Baostock，带内存缓存）
+# ============================================================
 @st.cache_data(ttl=3600)
 def fetch_stock_data(symbol, start_date, end_date, max_retries=2):
     """
-    使用 Baostock 获取 A 股历史日线数据（前复权）
-    仅使用内存缓存，不保存到本地硬盘
+    获取 A 股历史日线数据（前复权）
+    仅使用 Streamlit 内存缓存，不保存到硬盘
     """
     # 日期格式转换
     start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
@@ -33,7 +174,6 @@ def fetch_stock_data(symbol, start_date, end_date, max_retries=2):
     else:
         bs_code = f"sz.{symbol}"
 
-    # 网络请求（带重试）
     for attempt in range(max_retries):
         try:
             lg = bs.login()
@@ -64,10 +204,8 @@ def fetch_stock_data(symbol, start_date, end_date, max_retries=2):
                 df[col] = df[col].astype(float)
             bs.logout()
 
-            # 去重、排序
             df = df[~df.index.duplicated(keep='first')]
             df = df.sort_index()
-
             return df
 
         except Exception as e:
@@ -81,10 +219,10 @@ def fetch_stock_data(symbol, start_date, end_date, max_retries=2):
                 return None
     return None
 
-# ============================================================
-# 2. 策略信号生成
-# ============================================================
 
+# ============================================================
+# 4. 内置策略信号生成函数
+# ============================================================
 def generate_right_signal(df,
                           ma_short=5,
                           ma_mid=20,
@@ -97,11 +235,12 @@ def generate_right_signal(df,
                           kdj_m1=3,
                           kdj_m2=3):
     """
-    增强版右侧信号：增加RSI过滤，MACD红柱持续放大，利用score分层
+    增强版右侧趋势策略
+    条件：均线多头 + MACD零上金叉 + 放量突破 + 站上60日线 + (RSI强势 或 MACD红柱放大)
+    返回包含 signal 和 signal_type 的 DataFrame
     """
     data = df.copy()
-    data = data[~data.index.duplicated(keep='first')]
-    data = data.sort_index()
+    data = data[~data.index.duplicated(keep='first')].sort_index()
 
     # 均线
     data['MA5'] = data['close'].rolling(ma_short).mean()
@@ -114,7 +253,7 @@ def generate_right_signal(df,
     data['DIF'] = exp1 - exp2
     data['DEA'] = data['DIF'].ewm(span=9, adjust=False).mean()
     data['MACD_bar'] = (data['DIF'] - data['DEA']) * 2
-    data['MACD_bar_shift'] = data['MACD_bar'].shift(1)   # 新增：前一日红绿柱
+    data['MACD_bar_shift'] = data['MACD_bar'].shift(1)
 
     # 成交量
     data['VOL_MA20'] = data['volume'].rolling(20).mean()
@@ -134,7 +273,7 @@ def generate_right_signal(df,
     data['D'] = data['K'].ewm(span=kdj_m2, adjust=False).mean()
     data['J'] = 3 * data['K'] - 2 * data['D']
 
-    # 条件构建
+    # 条件
     cond1 = (data['MA5'] > data['MA20']) & (data['MA20'] > data['MA60'])   # 均线多头
     cond2 = (data['DIF'] > data['DEA']) & (data['DIF'] > 0)               # MACD零上金叉
     cond3 = data['volume'] > data['VOL_MA20'] * vol_ratio                 # 放量突破
@@ -143,30 +282,27 @@ def generate_right_signal(df,
     cond6 = (data['RSI'] > rsi_lower) & (data['RSI'] < rsi_upper)         # RSI强势
     cond7 = data['MACD_bar'] > data['MACD_bar_shift']                     # MACD红柱放大
 
-    # 核心条件：前4项必须满足
     core_signal = cond1 & cond2 & cond3 & cond4
-
-    # 总得分
     data['score'] = (cond1.astype(int) + cond2.astype(int) + cond3.astype(int) +
                      cond4.astype(int) + cond5.astype(int) + cond6.astype(int) + cond7.astype(int))
-
-    # 信号：核心 + (RSI或MACD放大)
     data['signal'] = core_signal & (cond6 | cond7)
     data['signal_type'] = 'right'
-
     return data
+
 
 def generate_v_shape_signal(df, lookback=10, drop_threshold=0.15,
                             rebound_threshold=0.01, vol_ratio=1.3, confirm_days=2):
+    """
+    V型反转策略：急跌 → 企稳 → 放量反弹
+    返回带 signal 的 DataFrame
+    """
     data = df.copy()
-    data = data[~data.index.duplicated(keep='first')]
-    data = data.sort_index()
-
+    data = data[~data.index.duplicated(keep='first')].sort_index()
     data['signal'] = False
     data['signal_type'] = 'v_shape'
     data['VOL_MA20'] = data['volume'].rolling(20).mean()
 
-    # 新增列用于存储触发时的参数
+    # 存储触发参数供买入原因使用
     data['drop_used'] = np.nan
     data['rebound_used'] = np.nan
     data['vol_ratio_used'] = np.nan
@@ -201,7 +337,7 @@ def generate_v_shape_signal(df, lookback=10, drop_threshold=0.15,
         if vol_ratio_curr < vol_ratio:
             continue
 
-        # 使用 .iloc 赋值，避免索引长度问题
+        # 触发信号
         data.iloc[i, data.columns.get_loc('signal')] = True
         data.iloc[i, data.columns.get_loc('drop_used')] = max_drawdown
         data.iloc[i, data.columns.get_loc('rebound_used')] = rebound
@@ -209,19 +345,61 @@ def generate_v_shape_signal(df, lookback=10, drop_threshold=0.15,
 
     return data
 
+
 # ============================================================
-# 3. 回测引擎（修复了每日权益记录）
+# 5. 回测引擎及相关辅助函数
 # ============================================================
+def get_entry_reason(row, signal_type):
+    """
+    根据信号类型和行数据生成买入原因描述
+    """
+    if signal_type == 'right':
+        reasons = []
+        if row.get('MA5', 0) > row.get('MA20', 0) and row.get('MA20', 0) > row.get('MA60', 0):
+            reasons.append('均线多头')
+        if row.get('DIF', 0) > row.get('DEA', 0) and row.get('DIF', 0) > 0:
+            reasons.append('MACD金叉')
+        if row.get('volume', 0) > row.get('VOL_MA20', 1) * 1.5:
+            reasons.append('放量')
+        if row.get('close', 0) > row.get('MA60', 0):
+            reasons.append('站上60日线')
+        if row.get('K', 0) > row.get('D', 0) and row.get('J', 0) > 20:
+            reasons.append('KDJ金叉')
+        if 'RSI' in row and 50 < row['RSI'] < 70:
+            reasons.append('RSI强势')
+        if 'MACD_bar' in row and 'MACD_bar_shift' in row and row['MACD_bar'] > row['MACD_bar_shift']:
+            reasons.append('MACD放大')
+        return ' | '.join(reasons) if reasons else '右侧信号'
+
+    elif signal_type == 'v_shape':
+        parts = []
+        if not np.isnan(row.get('drop_used', np.nan)):
+            parts.append(f"跌幅{row['drop_used']*100:.1f}%")
+        if not np.isnan(row.get('rebound_used', np.nan)):
+            parts.append(f"反弹{row['rebound_used']*100:.1f}%")
+        if not np.isnan(row.get('vol_ratio_used', np.nan)):
+            parts.append(f"量比{row['vol_ratio_used']:.2f}")
+        return ' | '.join(parts) if parts else 'V型反转'
+
+    elif signal_type == 'custom':
+        return '自定义策略'
+
+    else:
+        return '未知信号'
+
 
 def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                  stop_loss=0.08, take_profit=0.20, trailing_stop=0.05,
                  max_hold_days=20, position_pct=0.30):
+    """
+    核心回测引擎
+    返回交易明细、每日权益序列和绩效指标
+    """
     data = df.copy()
     data = data[data['signal'].notna()]
     if data.empty:
         return None, None, {'error': '无有效数据'}
 
-    # 确保 MA20 存在（用于右侧趋势止损）
     if 'MA20' not in data.columns:
         data['MA20'] = data['close'].rolling(20).mean()
 
@@ -240,14 +418,12 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
         current_high = data.iloc[i]['high']
         current_signal = data.iloc[i]['signal']
         signal_type = data.iloc[i].get('signal_type', 'unknown')
+        sold_this_step = False
 
-        sold_this_step = False  # 标记本次迭代是否刚卖出
-
-        # ---------- 持仓处理 ----------
+        # ---- 持仓卖出判断 ----
         if in_position:
             hold_days += 1
             highest_price = max(highest_price, current_high)
-
             should_sell = False
             sell_reason = ""
 
@@ -285,10 +461,8 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                 in_position = False
                 entry_price = 0
                 sold_this_step = True
-                # 不 continue，继续执行后续记录权益
 
-        # ---------- 买入（仅当未持仓且本步未卖出） ----------
-        # 在买入代码块中（约在 run_backtest 的中间部分）
+        # ---- 买入信号 ----
         if not in_position and not sold_this_step and current_signal:
             buy_price = current_price * (1 + slippage)
             portfolio_value = cash + position * buy_price
@@ -303,7 +477,6 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                     highest_price = buy_price
                     hold_days = 0
                     in_position = True
-                    # 生成买入原因
                     entry_reason = get_entry_reason(data.iloc[i], signal_type)
                     trades.append({
                         'date': current_date,
@@ -311,17 +484,14 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                         'price': round(buy_price, 3),
                         'size': size,
                         'signal_type': signal_type,
-                        'entry_reason': entry_reason  # 新增字段
+                        'entry_reason': entry_reason
                     })
 
-        # ---------- 每日权益记录（必须执行） ----------
-        if in_position:
-            equity = cash + position * current_price
-        else:
-            equity = cash
+        # ---- 记录每日权益 ----
+        equity = cash + position * current_price if in_position else cash
         daily_equity.append(equity)
 
-    # 若最后仍持仓，强制平仓
+    # 期末强制平仓
     if in_position and position > 0:
         last_price = data.iloc[-1]['close'] * (1 - slippage)
         cash += last_price * position
@@ -334,63 +504,15 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
             'hold_days': hold_days,
             'reason': '期末平仓'
         })
-        position = 0
-        in_position = False
 
-    # 生成交易记录和权益序列
     trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
-    # 长度应与 data 一致
     equity_series = pd.Series(daily_equity, index=data.index)
     metrics = calculate_metrics(daily_equity, trades)
-
     return trades_df, equity_series, metrics
 
 
-def get_entry_reason(row, signal_type):
-    """根据信号类型和行数据生成买入原因描述"""
-    if signal_type == 'right':
-        reasons = []
-        # 均线多头
-        if row.get('MA5', 0) > row.get('MA20', 0) and row.get('MA20', 0) > row.get('MA60', 0):
-            reasons.append('均线多头')
-        # MACD零上金叉
-        if row.get('DIF', 0) > row.get('DEA', 0) and row.get('DIF', 0) > 0:
-            reasons.append('MACD金叉')
-        # 放量
-        if row.get('volume', 0) > row.get('VOL_MA20', 1) * 1.5:
-            reasons.append('放量')
-        # 站上60日线
-        if row.get('close', 0) > row.get('MA60', 0):
-            reasons.append('站上60日线')
-        # KDJ金叉
-        if row.get('K', 0) > row.get('D', 0) and row.get('J', 0) > 20:
-            reasons.append('KDJ金叉')
-        # RSI强势（50~70）
-        if 'RSI' in row and 50 < row['RSI'] < 70:
-            reasons.append('RSI强势')
-        # MACD红柱放大
-        if 'MACD_bar' in row and 'MACD_bar_shift' in row:
-            if row['MACD_bar'] > row['MACD_bar_shift']:
-                reasons.append('MACD放大')
-        return ' | '.join(reasons) if reasons else '右侧信号'
-
-    elif signal_type == 'v_shape':
-        drop = row.get('drop_used', np.nan)
-        rebound = row.get('rebound_used', np.nan)
-        vol_ratio_used = row.get('vol_ratio_used', np.nan)
-        parts = []
-        if not np.isnan(drop):
-            parts.append(f"跌幅{drop*100:.1f}%")
-        if not np.isnan(rebound):
-            parts.append(f"反弹{rebound*100:.1f}%")
-        if not np.isnan(vol_ratio_used):
-            parts.append(f"量比{vol_ratio_used:.2f}")
-        return ' | '.join(parts) if parts else 'V型反转'
-
-    else:
-        return '未知信号'
-
 def calculate_metrics(daily_equity, trades):
+    """计算绩效指标"""
     if not daily_equity or len(daily_equity) < 2:
         return {'error': '数据不足'}
 
@@ -436,12 +558,12 @@ def calculate_metrics(daily_equity, trades):
         'final_equity': round(equity_series.iloc[-1], 2)
     }
 
-# ============================================================
-# 4. 可视化
-# ============================================================
 
+# ============================================================
+# 6. 可视化函数
+# ============================================================
 def plot_equity(equity_series):
-    """净值曲线（与回撤曲线风格统一，浅色背景）"""
+    """绘制净值曲线"""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=equity_series.index,
@@ -449,26 +571,21 @@ def plot_equity(equity_series):
         mode='lines',
         name='净值',
         line=dict(color='#1f77b4', width=2.5),
-        line_shape='spline'  # 平滑
+        line_shape='spline'
     ))
-    fig.update_layout(
-        title='净值曲线',
-        height=400,
-        margin=dict(l=40, r=40, t=40, b=40)  # 控制标题与图间距
-    )
+    fig.update_layout(title='净值曲线', height=400, margin=dict(l=40, r=40, t=40, b=40))
     fig.update_yaxes(title_text="净值")
     return fig
 
 
 def plot_kline_with_signals(data, trades_df):
-    """K线图与买卖点（含成交量副图），浅色背景，支持拖拽缩放"""
-    # 创建子图：2行1列，共享X轴
+    """绘制K线图、买卖点和成交量副图"""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05,
                         row_heights=[0.7, 0.3],
                         subplot_titles=('', ''))
 
-    # ---- 上子图：K线 ----
+    # 主图 K线
     fig.add_trace(go.Candlestick(
         x=data.index,
         open=data['open'],
@@ -482,7 +599,7 @@ def plot_kline_with_signals(data, trades_df):
         decreasing_fillcolor='#2ecc71'
     ), row=1, col=1)
 
-    # ---- 上子图：买卖点 ----
+    # 买卖点
     if trades_df is not None and not trades_df.empty:
         buys = trades_df[trades_df['action'] == 'BUY']
         if not buys.empty:
@@ -505,8 +622,8 @@ def plot_kline_with_signals(data, trades_df):
                 hovertemplate='<b>卖出</b><br>日期: %{x|%Y-%m-%d}<br>价格: %{y:.2f}<extra></extra>'
             ), row=1, col=1)
 
-    # ---- 下子图：成交量（红涨绿跌） ----
-    colors = ['#e74c3c' if close >= open else '#2ecc71' 
+    # 成交量
+    colors = ['#e74c3c' if close >= open else '#2ecc71'
               for close, open in zip(data['close'], data['open'])]
     fig.add_trace(go.Bar(
         x=data.index,
@@ -516,84 +633,98 @@ def plot_kline_with_signals(data, trades_df):
         hovertemplate='<b>成交量</b><br>日期: %{x|%Y-%m-%d}<br>成交: %{y:,.0f}<extra></extra>'
     ), row=2, col=1)
 
-    # ---- 全局布局 ----
+    # 布局
     fig.update_layout(
-        title=dict(
-            text='K线图与买卖点',
-            x=0.5,
-            xanchor='center',
-            y=0.98,
-            yanchor='top'
-        ),
+        title=dict(text='K线图与买卖点', x=0.5, xanchor='center', y=0.98, yanchor='top'),
         height=600,
         showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="center",
-            x=0.5,
-            bgcolor='rgba(255,255,255,0.8)'
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
+                    bgcolor='rgba(255,255,255,0.8)'),
         margin=dict(l=40, r=40, t=60, b=40),
         hovermode='x unified'
     )
-
-    # ---- X轴设置（底部子图显示时间选择器） ----
+    # X轴设置（底部子图）
     fig.update_xaxes(
         row=2, col=1,
         rangeslider_visible=False,
         rangeselector=dict(
-            buttons=list([
+            buttons=[
                 dict(count=1, label="1个月", step="month", stepmode="backward"),
                 dict(count=3, label="3个月", step="month", stepmode="backward"),
                 dict(count=6, label="6个月", step="month", stepmode="backward"),
                 dict(count=1, label="1年", step="year", stepmode="backward"),
                 dict(step="all", label="全部")
-            ]),
-            bgcolor='#e9ecef',
-            activecolor='#007bff',
-            font_color='black',
-            borderwidth=1
+            ],
+            bgcolor='#e9ecef', activecolor='#007bff', font_color='black', borderwidth=1
         ),
         title_text="日期"
     )
-    # 上子图X轴不显示标签
     fig.update_xaxes(row=1, col=1, showticklabels=False)
-
-    # ---- Y轴设置 ----
-    # 上子图：显示价格
+    # Y轴
     fig.update_yaxes(title_text="价格", row=1, col=1)
-    # 下子图：隐藏Y轴标题和刻度（不显示价格/数值）
-    fig.update_yaxes(
-        title_text="",               # 清空标题
-        showticklabels=False,        # 隐藏刻度标签
-        showgrid=False,              # 隐藏网格线（可选）
-        zeroline=False,              # 隐藏零线（可选）
-        row=2, col=1
-    )
-
+    fig.update_yaxes(title_text="", showticklabels=False, showgrid=False, zeroline=False, row=2, col=1)
     return fig
 
+
 def plot_drawdown(equity_series):
+    """绘制最大回撤曲线"""
     cum_max = equity_series.expanding().max()
     drawdown = (equity_series - cum_max) / cum_max * 100
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown,
-                             mode='lines', name='回撤 (%)', fill='tozeroy', line=dict(color='red')))
+    fig.add_trace(go.Scatter(
+        x=drawdown.index, y=drawdown,
+        mode='lines', name='回撤 (%)',
+        fill='tozeroy', line=dict(color='red')
+    ))
     fig.update_layout(title='最大回撤曲线', height=300)
     fig.update_yaxes(title_text="回撤 (%)")
     return fig
 
-# ============================================================
-# 5. Streamlit 界面
-# ============================================================
 
+# ============================================================
+# 7. Streamlit 界面
+# ============================================================
 st.set_page_config(page_title="量化回测系统", layout="wide")
-st.title("📈 量化策略回测系统")
-st.markdown("支持右侧趋势策略 & V型反转策略，数据来自 Baostock")
 
+# ---- 初始化 session state ----
+if "deepseek_api_key" not in st.session_state:
+    st.session_state.deepseek_api_key = ""
+if "deepseek_messages" not in st.session_state:
+    st.session_state.deepseek_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+if "generated_code" not in st.session_state:
+    st.session_state.generated_code = ""
+if "custom_strategy_code" not in st.session_state:
+    st.session_state.custom_strategy_code = ""
+
+st.title("📈 量化策略回测系统")
+st.markdown("支持内置策略、自定义策略和 AI 生成策略，数据来自 Baostock")
+
+# ============================================================
+# 侧边栏（参数设置与策略选择）
+# ============================================================
 with st.sidebar:
+    st.markdown("---")
+    st.subheader("🔑 API Key 设置")
+    if not st.session_state.deepseek_api_key:
+        api_key_input = st.text_input(
+            "请输入 DeepSeek API Key",
+            type="password",
+            placeholder="sk-...",
+            help="在 https://platform.deepseek.com/ 获取"
+        )
+        if st.button("保存 API Key"):
+            if api_key_input.startswith("sk-"):
+                st.session_state.deepseek_api_key = api_key_input
+                st.success("API Key 已保存（仅本次会话有效）")
+                st.rerun()
+            else:
+                st.error("请输入有效的 API Key（以 sk- 开头）")
+    else:
+        st.success("✅ API Key 已加载")
+        if st.button("重置 API Key"):
+            st.session_state.deepseek_api_key = ""
+            st.rerun()
+
     st.header("⚙️ 参数设置")
     symbol = st.text_input("股票代码 (如 600160)", value="600160")
     start_date = st.date_input("开始日期", value=datetime(2020, 1, 1))
@@ -601,20 +732,124 @@ with st.sidebar:
     start_str = start_date.strftime("%Y%m%d")
     end_str = end_date.strftime("%Y%m%d")
 
-    strategy_type = st.selectbox("选择策略", ["右侧趋势策略", "V型反转策略"])
+    strategy_type = st.selectbox(
+        "选择策略",
+        ["右侧趋势策略", "V型反转策略", "自定义策略", "🤖 AI 生成策略"]
+    )
 
+    # ---- 根据不同策略显示不同参数 ----
     st.subheader("策略参数")
-    if strategy_type == "右侧趋势策略":
+
+    # 为自定义策略和AI策略预留变量
+    user_code = ""
+    if strategy_type == "自定义策略":
+        st.markdown("请编写一个名为 `generate_signal` 的函数，接收 `df` 参数，返回包含 `signal` 和 `signal_type` 列的 DataFrame。")
+        default_code = """def generate_signal(df):
+    import pandas as pd
+    import numpy as np
+    data = df.copy()
+    # 示例：简单的双均线金叉策略
+    data['MA5'] = data['close'].rolling(5).mean()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+    data['signal_type'] = 'custom'
+    return data
+"""
+        if ACE_AVAILABLE:
+            user_code = st_ace(value=default_code, language='python', theme='monokai',
+                               keybinding='vscode', font_size=14, height=400)
+        else:
+            user_code = st.text_area("策略代码", value=default_code, height=400)
+
+    elif strategy_type == "右侧趋势策略":
         ma_short = st.slider("短期均线", 5, 20, 5)
         ma_mid = st.slider("中期均线", 10, 50, 20)
         ma_long = st.slider("长期均线", 30, 120, 60)
         vol_ratio = st.slider("放量倍数", 1.0, 3.0, 1.5, 0.1)
-    else:
+
+    elif strategy_type == "V型反转策略":
         lookback = st.slider("回看天数", 5, 20, 10)
         drop_threshold = st.slider("跌幅阈值", 0.10, 0.30, 0.15, 0.01)
         rebound_threshold = st.slider("反弹幅度", 0.01, 0.05, 0.01, 0.005)
         vol_ratio = st.slider("放量倍数", 1.0, 2.5, 1.3, 0.1)
 
+    elif strategy_type == "🤖 AI 生成策略":
+        # 检查 API Key 是否已设置
+        if not st.session_state.get("deepseek_api_key"):
+            st.warning("⚠️ 请先在侧边栏设置 DeepSeek API Key")
+        else:
+            # 显示聊天界面
+            st.markdown("🤖 **用自然语言描述策略**")
+            st.markdown("""
+            **示例**：
+            - "当5日均线上穿20日均线时买入"
+            - "RSI低于30时买入，高于70时卖出"
+            - "MACD金叉且成交量放大时买入"
+            """)
+
+            # 显示聊天历史（过滤 system 消息）
+            for msg in st.session_state.deepseek_messages:
+                if msg["role"] == "system":
+                    continue
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            # 聊天输入框
+            if prompt := st.chat_input("描述你的交易策略..."):
+                st.session_state.deepseek_messages.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("⏳ 正在生成策略代码..."):
+                        api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+                            m for m in st.session_state.deepseek_messages if m["role"] != "system"
+                        ]
+                        response = call_deepseek(api_messages)
+                        if response.startswith("[ERROR]"):
+                            st.error(response)
+                        else:
+                            # 显示生成的代码（仅展示，不可编辑）
+                            st.code(response, language="python")
+                            st.session_state.generated_code = response
+                            st.session_state.deepseek_messages.append({"role": "assistant", "content": response})
+                            # 提取并验证
+                            code = extract_code(response)
+                            is_valid, msg = validate_strategy_code(code)
+                            if is_valid:
+                                st.session_state.custom_strategy_code = code
+                                st.success("✅ 策略代码已自动提取并保存，可点击「运行回测」执行。")
+                            else:
+                                st.warning(f"⚠️ 代码验证: {msg}，您可以手动编辑后使用。")
+
+            # 显示可编辑的代码区域（如果有生成）
+            if st.session_state.generated_code:
+                st.subheader("📝 生成的策略代码（可编辑）")
+                edited_code = st.text_area(
+                    "你可以直接修改代码，然后点击下方按钮保存",
+                    value=st.session_state.generated_code,
+                    height=250,
+                    key="ai_edited_code"
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ 使用此策略回测", key="use_ai_code"):
+                        code = extract_code(edited_code) if edited_code != st.session_state.generated_code else st.session_state.generated_code
+                        is_valid, msg = validate_strategy_code(code)
+                        if is_valid:
+                            st.session_state.custom_strategy_code = code
+                            st.success("策略已保存，点击底部「运行回测」执行")
+                        else:
+                            st.error(f"代码验证失败: {msg}")
+                with col2:
+                    if st.button("🔄 重新生成", key="regenerate_ai"):
+                        if len(st.session_state.deepseek_messages) > 1 and st.session_state.deepseek_messages[-1]["role"] == "assistant":
+                            st.session_state.deepseek_messages.pop()
+                            st.session_state.generated_code = ""
+                            st.session_state.custom_strategy_code = ""
+                            st.rerun()
+
+    # ---- 交易参数（始终显示） ----
     st.subheader("交易参数")
     initial_cash = st.number_input("初始资金", value=100000, step=10000)
     stop_loss = st.slider("止损比例", 0.05, 0.15, 0.08, 0.01)
@@ -624,21 +859,68 @@ with st.sidebar:
 
     run_btn = st.button("🚀 运行回测", type="primary")
 
-# ---------- 主界面 ----------
+
+# ============================================================
+# 主界面：回测执行与结果展示
+# ============================================================
 if run_btn:
+    # ---- 获取数据 ----
     with st.spinner("正在获取数据..."):
         df = fetch_stock_data(symbol, start_str, end_str)
-
     if df is None or df.empty:
         st.error("无法获取数据，请检查股票代码或网络")
         st.stop()
 
+    # ---- 生成信号 ----
     with st.spinner("生成策略信号..."):
         if strategy_type == "右侧趋势策略":
             df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
-        else:
+        elif strategy_type == "V型反转策略":
             df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, vol_ratio)
+        elif strategy_type == "自定义策略":
+            try:
+                local_namespace = {}
+                exec(user_code, {}, local_namespace)
+                if 'generate_signal' not in local_namespace:
+                    st.error("未找到名为 'generate_signal' 的函数。")
+                    st.stop()
+                generate_signal = local_namespace['generate_signal']
+                df_signal = generate_signal(df)
+                if not isinstance(df_signal, pd.DataFrame):
+                    st.error("策略函数必须返回 DataFrame。")
+                    st.stop()
+                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列。")
+                    st.stop()
+                df_signal['signal'] = df_signal['signal'].astype(bool)
+            except Exception as e:
+                st.error(f"策略代码执行出错: {e}")
+                st.stop()
+        elif strategy_type == "🤖 AI 生成策略":
+            code = st.session_state.get("custom_strategy_code", "")
+            if not code:
+                st.error("请先生成或输入策略代码")
+                st.stop()
+            try:
+                local_namespace = {}
+                exec(code, {}, local_namespace)
+                if 'generate_signal' not in local_namespace:
+                    st.error("未找到 generate_signal 函数")
+                    st.stop()
+                generate_signal = local_namespace['generate_signal']
+                df_signal = generate_signal(df)
+                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列")
+                    st.stop()
+                df_signal['signal'] = df_signal['signal'].astype(bool)
+            except Exception as e:
+                st.error(f"策略执行出错: {e}")
+                st.stop()
+        else:
+            st.error("未知策略类型")
+            st.stop()
 
+    # ---- 运行回测 ----
     with st.spinner("运行回测..."):
         max_hold = 20 if strategy_type == "V型反转策略" else 999
         trades, equity, metrics = run_backtest(
@@ -657,6 +939,7 @@ if run_btn:
 
     st.success("回测完成！")
 
+    # ---- 显示核心指标 ----
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("总收益率", f"{metrics['total_return']:.2f}%")
     col2.metric("年化收益率", f"{metrics['annual_return']:.2f}%")
@@ -669,17 +952,12 @@ if run_btn:
     col7.metric("盈亏比", f"{metrics['profit_loss_ratio']:.3f}")
     col8.metric("平均持仓(天)", f"{metrics['avg_hold_days']:.1f}")
 
-    # 净值曲线
+    # ---- 图表 ----
     st.plotly_chart(plot_equity(equity), use_container_width=True)
-    st.markdown("<br>", unsafe_allow_html=True)  # 空行间隔
-
-    # K线图与买卖点
     st.plotly_chart(plot_kline_with_signals(df_signal, trades), use_container_width=True)
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # 最大回撤曲线
     st.plotly_chart(plot_drawdown(equity), use_container_width=True)
 
+    # ---- 交易明细与详细指标 ----
     with st.expander("📋 查看交易明细"):
         st.dataframe(trades, use_container_width=True)
 
