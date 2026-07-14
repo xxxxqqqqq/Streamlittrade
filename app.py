@@ -840,42 +840,6 @@ with st.sidebar:
         ["右侧趋势策略", "V型反转策略", "自定义策略", "🤖 AI 生成策略"]
     )
 
-    if strategy_type == "🤖 AI 生成策略":
-        st.subheader("🤖 用自然语言描述你的策略")
-        st.markdown("""
-        例如：
-        - "当5日均线上穿20日均线时买入，跌破60日均线时卖出"
-        - "RSI低于30时买入，高于70时卖出"
-        - "MACD金叉且成交量放大时买入"
-        """)
-
-        # 显示聊天界面（上面的代码）
-        # ...
-
-        # 显示生成的代码（可编辑）
-        if st.session_state.generated_code:
-            st.subheader("📝 生成的策略代码")
-            edited_code = st.text_area(
-                "你可以直接编辑下方的代码（可选）",
-                value=st.session_state.generated_code,
-                height=300
-            )
-
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✅ 使用此策略回测"):
-                    # 验证并保存代码
-                    is_valid, msg = validate_strategy_code(edited_code)
-                    if is_valid:
-                        st.session_state.custom_strategy_code = edited_code
-                        st.success("策略已保存，点击「运行回测」执行")
-                    else:
-                        st.error(f"代码验证失败: {msg}")
-            with col2:
-                if st.button("🔄 重新生成"):
-                    st.session_state.generated_code = ""
-                    st.rerun()
-
     if strategy_type == "自定义策略":
         st.subheader("✏️ 编辑策略代码")
         st.markdown(
