@@ -4,10 +4,16 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-import os
 import time
 import warnings
 import baostock as bs
+import re
+import os
+import requests
+import json
+from dotenv import load_dotenv
+from openai import OpenAI
+
 
 try:
     from streamlit_ace import st_ace
@@ -18,15 +24,13 @@ except ImportError:
 # ============================================================
 # 0. 引入deepseek用于生成自定义策略
 # ============================================================
-
-import os
-from dotenv import load_dotenv
+# 加载 .env 文件（如果存在）
 load_dotenv()
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+# 获取 API Key（优化为动态获取）
+DEEPSEEK_API_KEY = ""
 
 warnings.filterwarnings('ignore')
-
-from openai import OpenAI
 
 def get_deepseek_client():
     """初始化 DeepSeek 客户端"""
@@ -35,39 +39,76 @@ def get_deepseek_client():
         base_url="https://api.deepseek.com"
     )
 
-def call_deepseek(messages, model="deepseek-chat", temperature=0.3):
+def call_deepseek(messages, model="deepseek-chat", temperature=0.3, max_tokens=2000):
     """
-    调用 DeepSeek API
-    messages: 对话历史列表 [{"role": "user", "content": "..."}, ...]
+    使用 requests 直接调用 DeepSeek API，避免编码问题
     """
-    client = get_deepseek_client()
+    print(messages)  # 调试时查看
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=2000
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"API 调用失败: {e}"
+        # 确保 JSON 序列化时保留中文字符
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        return f"[ERROR] API 调用失败: {e}"
+    except KeyError:
+        return f"[ERROR] API 返回格式异常: {response.text}"
 
-import re
 
 def extract_code(text):
-    """从 DeepSeek 返回的文本中提取 Python 代码"""
-    # 匹配 ```python ... ``` 或 ``` ... ```
+    """
+    从 DeepSeek 返回的文本中提取 Python 代码
+    支持多种格式：
+    - ```python ... ```
+    - ``` ... ```
+    - 直接包含 def generate_signal 的代码块
+    """
+    # 尝试匹配 Markdown 代码块
     pattern = r"```(?:python)?\s*\n(.*?)```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
-        return matches[0].strip()
-    # 如果没有代码块标记，直接返回原文
+        code = matches[0].strip()
+        # 如果提取出的代码仍包含多余字符，尝试只保留 def 之后的内容
+        if "def generate_signal" in code:
+            return code
+        else:
+            # 可能匹配到了非 Python 代码块，继续尝试其他方法
+            pass
+
+    # 如果没有代码块标记，尝试查找 "def generate_signal" 并截取到文件末尾
+    if "def generate_signal" in text:
+        # 从 def 开始截取，直到结束
+        start = text.find("def generate_signal")
+        code = text[start:].strip()
+        # 去除可能的后缀 Markdown 标记
+        if code.endswith("```"):
+            code = code[:-3].strip()
+        return code
+
+    # 否则直接返回原文本（去除首尾空白）
     return text.strip()
 
+
 def validate_strategy_code(code):
-    """验证生成的代码是否符合规范"""
+    """验证生成的代码是否包含必要的函数和语法正确"""
+    # 调试：打印前200字符
+    print("=== 提取的代码预览 ===")
+    print(code[:200])
+    print("=== 代码结束 ===")
+
     try:
-        # 尝试编译
         compile(code, "<string>", "exec")
         # 检查是否包含 generate_signal 函数
         if "def generate_signal" not in code:
@@ -151,7 +192,6 @@ def fetch_stock_data(symbol, start_date, end_date, max_retries=2):
 # ============================================================
 # 2. 策略信号生成
 # ============================================================
-
 def generate_right_signal(df,
                           ma_short=5,
                           ma_mid=20,
@@ -275,6 +315,90 @@ def generate_v_shape_signal(df, lookback=10, drop_threshold=0.15,
         data.iloc[i, data.columns.get_loc('vol_ratio_used')] = vol_ratio_curr
 
     return data
+
+# ============================================================
+# DeepSeek 策略代码生成器
+# ============================================================
+
+SYSTEM_PROMPT = """你是一个量化交易策略代码生成助手。你的任务是根据用户的自然语言描述，生成符合以下规范的 Python 策略代码。
+
+【代码规范】
+1. 必须定义一个名为 `generate_signal` 的函数
+2. 函数接收一个参数 `df`（Pandas DataFrame，包含 open, high, low, close, volume 列）
+3. 函数必须返回一个 DataFrame，包含以下列：
+   - 'signal': 布尔类型，True 表示买入信号
+   - 'signal_type': 字符串，固定为 'custom'
+4. 可以在函数内部计算任何技术指标（MA, MACD, RSI, KDJ 等）
+5. 代码需要包含必要的 import 语句（如 import pandas as pd, import numpy as np）
+
+【输出要求 - 极其重要】
+- 只输出 Python 纯代码，不要使用任何 Markdown 代码块标记（如 ```python 或 ```）
+- 不要添加任何解释文字、注释（除代码内必要的注释外）
+- 输出内容必须从 `import` 或 `def` 直接开始，以 `return data` 结束
+- 代码必须可以直接复制并运行，无语法错误
+
+【示例】
+用户说："当5日均线上穿20日均线时买入"
+你应输出：
+import pandas as pd
+import numpy as np
+
+def generate_signal(df):
+    data = df.copy()
+    data['MA5'] = data['close'].rolling(5).mean()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+    data['signal_type'] = 'custom'
+    return data
+
+现在，请根据用户的策略描述生成代码，严格遵守纯代码输出要求。"""
+
+
+def call_deepseek(messages, model="deepseek-chat", temperature=0.3, max_tokens=2000):
+    """调用 DeepSeek API，从 session_state 获取 API Key"""
+    api_key = st.session_state.get("deepseek_api_key", "")
+    if not api_key:
+        return "[ERROR] 请先在侧边栏设置 DeepSeek API Key"
+
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"[ERROR] API 调用失败: {e}"
+
+def extract_code(text):
+    """
+    从 DeepSeek 返回的文本中提取 Python 代码（去除 markdown 代码块标记）
+    """
+    pattern = r"```(?:python)?\s*\n(.*?)```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    return matches[0].strip() if matches else text.strip()
+
+def validate_strategy_code(code):
+    """
+    验证生成的代码是否包含必要的函数和语法正确
+    """
+    try:
+        compile(code, "<string>", "exec")
+        if "def generate_signal" not in code:
+            return False, "未找到 generate_signal 函数"
+        if "return" not in code:
+            return False, "函数缺少 return 语句"
+        return True, "代码验证通过"
+    except SyntaxError as e:
+        return False, f"语法错误: {e}"
 
 # ============================================================
 # 3. 回测引擎（修复了每日权益记录）
@@ -453,6 +577,9 @@ def get_entry_reason(row, signal_type):
         if not np.isnan(vol_ratio_used):
             parts.append(f"量比{vol_ratio_used:.2f}")
         return ' | '.join(parts) if parts else 'V型反转'
+
+    elif signal_type == 'custom':
+        return '自定义策略'
 
     else:
         return '未知信号'
@@ -657,10 +784,50 @@ def plot_drawdown(equity_series):
 # ============================================================
 
 st.set_page_config(page_title="量化回测系统", layout="wide")
+
+# 初始化 session_state 中的 api_key
+if "deepseek_api_key" not in st.session_state:
+    st.session_state.deepseek_api_key = ""
+
+# ============================================================
+# 初始化会话状态（必须在任何访问之前）
+# ============================================================
+if "deepseek_messages" not in st.session_state:
+    st.session_state.deepseek_messages = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
+if "generated_code" not in st.session_state:
+    st.session_state.generated_code = ""
+if "custom_strategy_code" not in st.session_state:
+    st.session_state.custom_strategy_code = ""
+
 st.title("📈 量化策略回测系统")
-st.markdown("支持右侧趋势策略 & V型反转策略 & 自定义交易策略，数据来自 Baostock")
+st.markdown("支持右侧趋势策略 & V型反转策略 & 自定义交易策略 & AI生成策略，数据来自 Baostock")
 
 with st.sidebar:
+    st.markdown("---")
+    st.subheader("🔑 API Key 设置")
+
+    # 如果尚未保存 Key，显示输入框
+    if not st.session_state.deepseek_api_key:
+        api_key_input = st.text_input(
+            "请输入 DeepSeek API Key",
+            type="password",
+            placeholder="sk-...",
+            help="在 https://platform.deepseek.com/ 获取"
+        )
+        if st.button("保存 API Key"):
+            if api_key_input.startswith("sk-"):
+                st.session_state.deepseek_api_key = api_key_input
+                st.success("API Key 已保存（仅本次会话有效）")
+                st.rerun()
+            else:
+                st.error("请输入有效的 API Key（以 sk- 开头）")
+    else:
+        st.success("✅ API Key 已加载")
+        if st.button("重置 API Key"):
+            st.session_state.deepseek_api_key = ""
+            st.rerun()
     st.header("⚙️ 参数设置")
     symbol = st.text_input("股票代码 (如 600160)", value="600160")
     start_date = st.date_input("开始日期", value=datetime(2020, 1, 1))
@@ -742,11 +909,96 @@ with st.sidebar:
         ma_mid = st.slider("中期均线", 10, 50, 20)
         ma_long = st.slider("长期均线", 30, 120, 60)
         vol_ratio = st.slider("放量倍数", 1.0, 3.0, 1.5, 0.1)
-    else:
+    elif strategy_type == "V型反转策略":
         lookback = st.slider("回看天数", 5, 20, 10)
         drop_threshold = st.slider("跌幅阈值", 0.10, 0.30, 0.15, 0.01)
         rebound_threshold = st.slider("反弹幅度", 0.01, 0.05, 0.01, 0.005)
         vol_ratio = st.slider("放量倍数", 1.0, 2.5, 1.3, 0.1)
+    elif strategy_type == "🤖 AI 生成策略":
+        # 检查 API Key 是否已设置
+        if not st.session_state.get("deepseek_api_key"):
+            st.warning("⚠️ 请先在左侧侧边栏设置 DeepSeek API Key")
+            st.stop()  # 或跳过显示聊天界面
+            # 不显示聊天输入框
+
+        # 显示聊天界面...
+        st.subheader("🤖 用自然语言描述策略")
+        st.markdown("""
+        **示例**：
+        - "当5日均线上穿20日均线时买入"
+        - "RSI低于30时买入，高于70时卖出"
+        - "MACD金叉且成交量放大时买入"
+        """)
+
+        # --- 显示聊天历史 ---
+        # 过滤掉 system 消息，只显示用户和助手
+        for msg in st.session_state.deepseek_messages:
+            if msg["role"] == "system":
+                continue
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # --- 聊天输入框 ---
+        if prompt := st.chat_input("描述你的交易策略..."):
+            # 添加用户消息
+            st.session_state.deepseek_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # 调用 DeepSeek
+            with st.chat_message("assistant"):
+                with st.spinner("⏳ 正在生成策略代码..."):
+                    # 构建 API 消息（不含 system，因为我们会单独传入）
+                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+                        m for m in st.session_state.deepseek_messages if m["role"] != "system"
+                    ]
+                    response = call_deepseek(api_messages)
+                    if response.startswith("[ERROR]"):
+                        st.error(response)
+                    else:
+                        st.code(response, language="python")
+                        st.session_state.generated_code = response
+                        st.session_state.deepseek_messages.append({"role": "assistant", "content": response})
+                        # 自动提取代码并保存
+                        code = extract_code(response)
+                        is_valid, msg = validate_strategy_code(code)
+                        if is_valid:
+                            st.session_state.custom_strategy_code = code
+                            st.success("✅ 策略代码已自动提取并保存，可点击「运行回测」执行。")
+                        else:
+                            st.warning(f"⚠️ 代码验证: {msg}，您可以手动编辑后使用。")
+
+        # --- 显示当前生成的代码（可编辑） ---
+        if st.session_state.generated_code:
+            st.subheader("📝 生成的策略代码（可编辑）")
+            edited_code = st.text_area(
+                "你可以直接修改代码，然后点击下方按钮保存",
+                value=st.session_state.generated_code,
+                height=250,
+                key="ai_edited_code"
+            )
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("✅ 使用此策略回测", key="use_ai_code"):
+                    # 验证并保存
+                    code = extract_code(
+                        edited_code) if edited_code != st.session_state.generated_code else st.session_state.generated_code
+                    is_valid, msg = validate_strategy_code(code)
+                    if is_valid:
+                        st.session_state.custom_strategy_code = code
+                        st.success("策略已保存，点击底部「运行回测」执行")
+                    else:
+                        st.error(f"代码验证失败: {msg}")
+            with col_btn2:
+                if st.button("🔄 重新生成", key="regenerate_ai"):
+                    # 保留消息历史，但清空最后一条 assistant 回复，以便重新生成
+                    if len(st.session_state.deepseek_messages) > 1 and st.session_state.deepseek_messages[-1][
+                        "role"] == "assistant":
+                        st.session_state.deepseek_messages.pop()
+                        st.session_state.generated_code = ""
+                        st.session_state.custom_strategy_code = ""
+                        st.rerun()
+
 
     st.subheader("交易参数")
     initial_cash = st.number_input("初始资金", value=100000, step=10000)
@@ -813,7 +1065,7 @@ if run_btn:
         else :
             if strategy_type == "右侧趋势策略":
                 df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
-            else:
+            if strategy_type == "V型反转策略":
                 df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, vol_ratio)
 
     with st.spinner("运行回测..."):
