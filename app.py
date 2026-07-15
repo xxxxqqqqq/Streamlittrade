@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 # 尝试导入增强代码编辑器（可选）
 try:
-    from streamlit_ace import st_ace
+    from streamlit_ace import st_ace  # type: ignore[import-unresolved]
     ACE_AVAILABLE = True
 except ImportError:
     ACE_AVAILABLE = False
@@ -412,9 +412,14 @@ def get_entry_reason(row, signal_type):
 
 def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                  stop_loss=0.08, take_profit=0.20, trailing_stop=0.05,
+                 use_atr_stop=False, atr_period=14, atr_multiple=2.0,
+                 stamp_duty=0.0005, signal_confirm=1,
                  max_hold_days=20, position_pct=0.30):
     """
-    核心回测引擎
+    核心回测引擎（专业版）
+    - ATR 动态止损：基于波动率自适应调整止损位
+    - 印花税：A股卖出单边征收（默认0.05%）
+    - 信号确认：要求信号持续N天才触发买入，过滤假突破
     返回交易明细、每日权益序列和绩效指标
     """
     data = df.copy()
@@ -424,6 +429,24 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
 
     if 'MA20' not in data.columns:
         data['MA20'] = data['close'].rolling(20).mean()
+
+    # ---- ATR 计算（用于动态止损）----
+    if use_atr_stop:
+        data['TR'] = np.maximum(
+            data['high'] - data['low'],
+            np.maximum(
+                abs(data['high'] - data['close'].shift(1)),
+                abs(data['low'] - data['close'].shift(1))
+            )
+        )
+        data['ATR'] = data['TR'].rolling(atr_period).mean()
+
+    # ---- 信号确认：连续N天出信号才算有效 ----
+    if signal_confirm > 1:
+        confirm_count = data['signal'].astype(int).rolling(signal_confirm).sum()
+        data['signal_confirmed'] = (confirm_count >= signal_confirm) & data['signal']
+    else:
+        data['signal_confirmed'] = data['signal']
 
     cash = initial_cash
     position = 0
@@ -450,7 +473,13 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
             sell_reason = ""
 
             if hold_days >= 2:  # T+1
-                if current_price <= entry_price * (1 - stop_loss):
+                # ATR 动态止损（优先于固定比例移动止损）
+                if use_atr_stop and not np.isnan(data.iloc[i].get('ATR', np.nan)):
+                    atr_stop_price = highest_price - atr_multiple * data.iloc[i]['ATR']
+                    if current_price <= atr_stop_price:
+                        should_sell = True
+                        sell_reason = f"ATR动态止损 ({atr_multiple:.1f}xATR)"
+                elif current_price <= entry_price * (1 - stop_loss):
                     should_sell = True
                     sell_reason = f"硬止损 (-{stop_loss*100:.0f}%)"
                 elif current_price <= highest_price * (1 - trailing_stop):
@@ -468,7 +497,7 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
 
             if should_sell:
                 sell_price = current_price * (1 - slippage)
-                fee = sell_price * position * commission
+                fee = sell_price * position * (commission + stamp_duty)  # 含印花税
                 cash += sell_price * position - fee
                 profit = (sell_price - entry_price) / entry_price
                 trades.append({
@@ -484,8 +513,8 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
                 entry_price = 0
                 sold_this_step = True
 
-        # ---- 买入信号 ----
-        if not in_position and not sold_this_step and current_signal:
+        # ---- 买入信号（使用确认后的信号）----
+        if not in_position and not sold_this_step and data.iloc[i]['signal_confirmed']:
             buy_price = current_price * (1 + slippage)
             portfolio_value = cash + position * buy_price
             target_value = portfolio_value * position_pct
@@ -513,10 +542,11 @@ def run_backtest(df, initial_cash=100000, commission=0.0003, slippage=0.001,
         equity = cash + position * current_price if in_position else cash
         daily_equity.append(equity)
 
-    # 期末强制平仓
+    # 期末强制平仓（含印花税）
     if in_position and position > 0:
         last_price = data.iloc[-1]['close'] * (1 - slippage)
-        cash += last_price * position
+        fee = last_price * position * (commission + stamp_duty)
+        cash += last_price * position - fee
         profit = (last_price - entry_price) / entry_price
         trades.append({
             'date': data.index[-1],
@@ -564,11 +594,37 @@ def calculate_metrics(daily_equity, trades):
 
     avg_hold_days = np.mean([t['hold_days'] for t in sell_trades]) if sell_trades else 0
 
+    # ---- 高级绩效指标 ----
+    # Calmar 比率（年化收益 / 最大回撤绝对值）
+    calmar = annual_return / abs(max_drawdown) if max_drawdown != 0 else 0
+
+    # 盈亏因子（总盈利 / 总亏损）
+    total_win = sum([t['profit_pct'] for t in win_trades]) if win_trades else 0
+    total_loss = abs(sum([t['profit_pct'] for t in loss_trades])) if loss_trades else 1
+    profit_factor = total_win / total_loss if total_loss > 0 else 0
+
+    # 最大连续亏损次数
+    max_consecutive_loss = 0
+    current_streak = 0
+    for t in sell_trades:
+        if t['profit_pct'] <= 0:
+            current_streak += 1
+            max_consecutive_loss = max(max_consecutive_loss, current_streak)
+        else:
+            current_streak = 0
+
+    # Sortino 比率（使用下行标准差）
+    downside_returns = returns[returns < 0]
+    downside_std = downside_returns.std() if len(downside_returns) > 1 else 0
+    sortino = (returns.mean() - risk_free) / downside_std * np.sqrt(250) if downside_std > 0 else 0
+
     return {
         'total_return': round(total_return, 2),
         'annual_return': round(annual_return, 2),
         'max_drawdown': round(max_drawdown, 2),
         'sharpe_ratio': round(sharpe, 3),
+        'sortino_ratio': round(sortino, 3),
+        'calmar_ratio': round(calmar, 3),
         'total_trades': total_trades,
         'win_trades': len(win_trades),
         'loss_trades': len(loss_trades),
@@ -576,6 +632,8 @@ def calculate_metrics(daily_equity, trades):
         'avg_win': round(avg_win, 2),
         'avg_loss': round(avg_loss, 2),
         'profit_loss_ratio': round(profit_loss_ratio, 3),
+        'profit_factor': round(profit_factor, 3),
+        'max_consecutive_loss': max_consecutive_loss,
         'avg_hold_days': round(avg_hold_days, 1),
         'final_equity': round(equity_series.iloc[-1], 2)
     }
@@ -737,19 +795,20 @@ Highcharts.stockChart('hc',{{
     backgroundColor:'transparent'
   }},
 
-  // ======= Y 轴：价格左侧 / 成交量右侧 =======
+  // ======= Y 轴：价格左侧 / 成交量右侧（错开布局，防止重叠）=======
   yAxis:[{{
     labels:{{enabled:true,align:'left',x:0,
       style:{{color:'#ffffff',fontSize:'14px'}}}},
     gridLineColor:GRID,gridLineWidth:0.5,
     opposite:false,lineColor:GRID,tickColor:TEXT,
-    tickLength:5,tickWidth:1,tickAmount:8,
+    tickLength:5,tickWidth:1,tickAmount:7,
     showFirstLabel:true,showLastLabel:true,
+    height:'66%',
     resize:{{enabled:true}}
   }},{{
     labels:{{enabled:false}},gridLineWidth:0,
-    opposite:true,top:'73%',height:'27%',
-    lineWidth:0,tickWidth:0
+    opposite:true,top:'70%',height:'30%',
+    lineWidth:0,tickWidth:0,offset:0
   }}],
 
   // ======= X 轴 =======
@@ -804,7 +863,7 @@ def plot_drawdown(equity_series):
 
 
 # ============================================================
-# 7. Streamlit 界面
+# 7. Streamlit 界面 — 多页面导航
 # ============================================================
 st.set_page_config(page_title="量化回测系统", layout="wide")
 
@@ -817,284 +876,567 @@ if "generated_code" not in st.session_state:
     st.session_state.generated_code = ""
 if "custom_strategy_code" not in st.session_state:
     st.session_state.custom_strategy_code = ""
+if "active_strategy_name" not in st.session_state:
+    st.session_state.active_strategy_name = "内置-右侧趋势"
 
-st.title("📈 量化策略回测系统")
-st.markdown("支持内置策略、自定义策略和 AI 生成策略，数据来自 Baostock")
 
 # ============================================================
-# 侧边栏（参数设置与策略选择）
+# Page 1: 📊 策略回测中心
 # ============================================================
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("🔑 API Key 设置")
-    if not st.session_state.deepseek_api_key:
-        api_key_input = st.text_input(
-            "请输入 DeepSeek API Key",
-            type="password",
-            placeholder="sk-...",
-            help="在 https://platform.deepseek.com/ 获取"
-        )
-        if st.button("保存 API Key"):
-            if api_key_input.startswith("sk-"):
-                st.session_state.deepseek_api_key = api_key_input
-                st.success("API Key 已保存（仅本次会话有效）")
-                st.rerun()
-            else:
-                st.error("请输入有效的 API Key（以 sk- 开头）")
-    else:
-        st.success("✅ API Key 已加载")
-        if st.button("重置 API Key"):
-            st.session_state.deepseek_api_key = ""
-            st.rerun()
+def backtest_page():
+    st.title("📈 量化策略回测系统")
 
-    st.header("⚙️ 参数设置")
-    symbol = st.text_input("股票代码 (如 600160)", value="600160")
-    start_date = st.date_input("开始日期", value=datetime(2020, 1, 1))
-    end_date = st.date_input("结束日期", value=datetime.now())
-    start_str = start_date.strftime("%Y%m%d")
-    end_str = end_date.strftime("%Y%m%d")
-
-    strategy_type = st.selectbox(
-        "选择策略",
-        ["右侧趋势策略", "V型反转策略", "自定义策略", "🤖 AI 生成策略"]
-    )
-
-    # ---- 根据不同策略显示不同参数 ----
-    st.subheader("策略参数")
-
-    # 为自定义策略和AI策略预留变量
-    user_code = ""
-    if strategy_type == "自定义策略":
-        st.markdown("请编写一个名为 `generate_signal` 的函数，接收 `df` 参数，返回包含 `signal` 和 `signal_type` 列的 DataFrame。")
-        default_code = """def generate_signal(df):
+    DEFAULT_CUSTOM_CODE = """def generate_signal(df):
     import pandas as pd
     import numpy as np
     data = df.copy()
-    # 示例：简单的双均线金叉策略
+    # 示例：双均线金叉策略
     data['MA5'] = data['close'].rolling(5).mean()
     data['MA20'] = data['close'].rolling(20).mean()
     data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
     data['signal_type'] = 'custom'
     return data
 """
-        if ACE_AVAILABLE:
-            user_code = st_ace(value=default_code, language='python', theme='monokai',
-                               keybinding='vscode', font_size=14, height=400)
+
+    # ---- 侧边栏：极简交易控制台 ----
+    with st.sidebar:
+        st.header("📊 交易控制台")
+
+        symbol = st.text_input("股票代码", value="600160", placeholder="如 600160")
+
+        col_s, col_e = st.columns(2)
+        with col_s:
+            start_date = st.date_input("开始日期", value=datetime(2020, 1, 1))
+        with col_e:
+            end_date = st.date_input("结束日期", value=datetime.now())
+        start_str = start_date.strftime("%Y%m%d")
+        end_str = end_date.strftime("%Y%m%d")
+
+        initial_cash = st.number_input("💰 初始资金", value=100000, step=10000, format="%d")
+
+        st.markdown("---")
+
+        # 当前策略指示器
+        strategy_label = st.session_state.active_strategy_name
+        st.caption(f"📌 当前策略：**{strategy_label}**")
+
+        run_btn = st.button("🚀 运行回测", type="primary", use_container_width=True)
+
+        st.markdown("---")
+
+        # API Key（折叠）
+        with st.expander("🔑 DeepSeek API Key"):
+            if not st.session_state.deepseek_api_key:
+                api_key_input = st.text_input(
+                    "API Key", type="password", placeholder="sk-...",
+                    label_visibility="collapsed", key="sidebar_api_key"
+                )
+                if st.button("保存 Key", key="save_api_key_sidebar"):
+                    if api_key_input.startswith("sk-"):
+                        st.session_state.deepseek_api_key = api_key_input
+                        st.success("✅ 已保存")
+                        st.rerun()
+                    else:
+                        st.error("请输入有效的 API Key（以 sk- 开头）")
+            else:
+                st.success("✅ API Key 已配置")
+                if st.button("🗑️ 重置 Key", key="reset_api_key_sidebar"):
+                    st.session_state.deepseek_api_key = ""
+                    st.rerun()
+
+    # ================================================================
+    # 主区域 — 紧凑策略栏
+    # ================================================================
+    strategy_type = st.radio(
+        "策略来源",
+        ["📈 内置", "✏️ 自定义", "🤖 AI"],
+        horizontal=True,
+        key="backtest_strategy_type",
+        help="内置=预设策略 | 自定义=手动编码 | AI=DeepSeek生成"
+    )
+
+    # ---- 策略参数默认值 ----
+    user_code = ""
+    ma_short, ma_mid, ma_long = 5, 20, 60
+    vol_ratio = 1.5
+    lookback, drop_threshold, rebound_threshold = 10, 0.15, 0.01
+    v_vol_ratio = 1.3
+    builtin_sub = "📈 右侧趋势"
+
+    # ---- 内置策略 ----
+    if strategy_type == "📈 内置":
+        builtin_sub = st.radio(
+            "子策略", ["📈 右侧趋势", "🔍 V型反转"],
+            horizontal=True, key="builtin_sub_radio"
+        )
+        if builtin_sub == "📈 右侧趋势":
+            p1, p2, p3, p4 = st.columns(4)
+            with p1:
+                ma_short = st.slider("短期均线", 5, 20, 5, key="ma_short")
+            with p2:
+                ma_mid = st.slider("中期均线", 10, 50, 20, key="ma_mid")
+            with p3:
+                ma_long = st.slider("长期均线", 30, 120, 60, key="ma_long")
+            with p4:
+                vol_ratio = st.slider("放量倍数", 1.0, 3.0, 1.5, 0.1, key="r_vol_ratio")
         else:
-            user_code = st.text_area("策略代码", value=default_code, height=400)
+            p1, p2, p3, p4 = st.columns(4)
+            with p1:
+                lookback = st.slider("回看天数", 5, 20, 10, key="v_lookback")
+            with p2:
+                drop_threshold = st.slider("跌幅阈值", 0.10, 0.30, 0.15, 0.01, key="v_drop")
+            with p3:
+                rebound_threshold = st.slider("反弹幅度", 0.01, 0.05, 0.01, 0.005, key="v_rebound")
+            with p4:
+                v_vol_ratio = st.slider("放量倍数", 1.0, 2.5, 1.3, 0.1, key="v_vol_ratio2")
 
-    elif strategy_type == "右侧趋势策略":
-        ma_short = st.slider("短期均线", 5, 20, 5)
-        ma_mid = st.slider("中期均线", 10, 50, 20)
-        ma_long = st.slider("长期均线", 30, 120, 60)
-        vol_ratio = st.slider("放量倍数", 1.0, 3.0, 1.5, 0.1)
+    # ---- 自定义策略 ----
+    elif strategy_type == "✏️ 自定义":
+        existing_code = st.session_state.get("custom_strategy_code", "")
+        user_code = st.text_area(
+            "策略代码（在「策略工坊」页面编写）",
+            value=existing_code if existing_code else DEFAULT_CUSTOM_CODE,
+            height=200, key="backtest_custom_code"
+        )
 
-    elif strategy_type == "V型反转策略":
-        lookback = st.slider("回看天数", 5, 20, 10)
-        drop_threshold = st.slider("跌幅阈值", 0.10, 0.30, 0.15, 0.01)
-        rebound_threshold = st.slider("反弹幅度", 0.01, 0.05, 0.01, 0.005)
-        vol_ratio = st.slider("放量倍数", 1.0, 2.5, 1.3, 0.1)
-
-    elif strategy_type == "🤖 AI 生成策略":
-        # 检查 API Key 是否已设置
-        if not st.session_state.get("deepseek_api_key"):
-            st.warning("⚠️ 请先在侧边栏设置 DeepSeek API Key")
+    # ---- AI 策略 ----
+    elif strategy_type == "🤖 AI":
+        code = st.session_state.get("custom_strategy_code", "")
+        if code:
+            st.success("✅ 已加载 AI 生成策略 — 在「策略工坊」页面可修改")
+            with st.expander("📝 查看策略代码"):
+                st.code(code, language="python")
         else:
-            # 显示聊天界面
-            st.markdown("🤖 **用自然语言描述策略**")
+            st.warning("⚠️ 尚未生成 AI 策略，请切换到「🤖 策略工坊」页面创建")
+
+    # ---- 高级交易参数（折叠）----
+    with st.expander("📐 高级交易参数", expanded=False):
+        col_t1, col_t2, col_t3 = st.columns(3)
+        with col_t1:
+            stop_loss = st.slider("硬止损比例", 0.03, 0.20, 0.08, 0.01,
+                                  help="亏损超此比例立即止损")
+            take_profit = st.slider("目标止盈比例", 0.10, 0.50, 0.20, 0.05,
+                                    help="盈利达此比例自动止盈")
+            position_pct = st.slider("单次建仓比例", 0.10, 0.99, 0.30, 0.05,
+                                     help="每次买入占总资金比例")
+        with col_t2:
+            trailing_stop = st.slider("移动止损回撤", 0.00, 0.15, 0.05, 0.01,
+                                      help="从最高点回撤此比例退出（0=关闭）")
+            use_atr_stop = st.checkbox("启用 ATR 动态止损", value=False,
+                                       help="基于波动率自适应止损")
+            atr_multiple = 2.0
+            if use_atr_stop:
+                atr_multiple = st.slider("ATR 止损倍数", 1.0, 4.0, 2.0, 0.5,
+                                         help="止损价=最高价 - N×ATR，常用2~3倍")
+        with col_t3:
+            signal_confirm = st.slider("信号确认天数", 1, 5, 1,
+                                       help="信号持续N天才买入，过滤假突破")
+            slippage = st.number_input("滑点比例", value=0.001, format="%.4f")
+            stamp_duty = st.number_input("印花税率（卖出）", value=0.0005, format="%.4f",
+                                         help="A股卖出单边0.05%，买入免征")
+
+    st.markdown("---")
+
+    # ================================================================
+    # 回测结果看板
+    # ================================================================
+    if run_btn:
+        # ---- 获取数据 ----
+        with st.spinner("正在获取数据..."):
+            df = fetch_stock_data(symbol, start_str, end_str)
+        if df is None or df.empty:
+            st.error("无法获取数据，请检查股票代码或网络")
+            st.stop()
+
+        # ---- 生成信号 ----
+        with st.spinner("生成策略信号..."):
+            if strategy_type == "📈 内置":
+                if builtin_sub == "📈 右侧趋势":
+                    df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
+                else:
+                    df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, v_vol_ratio)
+                st.session_state.active_strategy_name = builtin_sub
+
+            elif strategy_type == "✏️ 自定义":
+                code = user_code if user_code else st.session_state.get("custom_strategy_code", "")
+                if not code:
+                    st.error("请先编写策略代码")
+                    st.stop()
+                try:
+                    local_namespace = {}
+                    exec(code, {}, local_namespace)
+                    if 'generate_signal' not in local_namespace:
+                        st.error("未找到 generate_signal 函数")
+                        st.stop()
+                    generate_signal = local_namespace['generate_signal']
+                    df_signal = generate_signal(df)
+                    if not isinstance(df_signal, pd.DataFrame):
+                        st.error("策略函数必须返回 DataFrame")
+                        st.stop()
+                    if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                        st.error("返回值缺少 signal 或 signal_type 列")
+                        st.stop()
+                    df_signal['signal'] = df_signal['signal'].astype(bool)
+                except Exception as e:
+                    st.error(f"策略执行出错: {e}")
+                    st.stop()
+                st.session_state.active_strategy_name = "自定义策略"
+
+            elif strategy_type == "🤖 AI":
+                code = st.session_state.get("custom_strategy_code", "")
+                if not code:
+                    st.error("请先在「策略工坊」页面生成 AI 策略代码")
+                    st.stop()
+                try:
+                    local_namespace = {}
+                    exec(code, {}, local_namespace)
+                    if 'generate_signal' not in local_namespace:
+                        st.error("未找到 generate_signal 函数")
+                        st.stop()
+                    generate_signal = local_namespace['generate_signal']
+                    df_signal = generate_signal(df)
+                    if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
+                        st.error("返回值缺少 signal 或 signal_type 列")
+                        st.stop()
+                    df_signal['signal'] = df_signal['signal'].astype(bool)
+                except Exception as e:
+                    st.error(f"策略执行出错: {e}")
+                    st.stop()
+                st.session_state.active_strategy_name = "AI生成策略"
+            else:
+                st.error("未知策略类型")
+                st.stop()
+
+        # ---- 运行回测 ----
+        with st.spinner("运行回测..."):
+            max_hold = 20 if (strategy_type == "📈 内置" and builtin_sub == "🔍 V型反转") else 999
+            trades, equity, metrics = run_backtest(
+                df_signal,
+                initial_cash=initial_cash,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                trailing_stop=trailing_stop,
+                use_atr_stop=use_atr_stop,
+                atr_multiple=atr_multiple,
+                stamp_duty=stamp_duty,
+                signal_confirm=signal_confirm,
+                slippage=slippage,
+                position_pct=position_pct,
+                max_hold_days=max_hold
+            )
+
+        if trades is None or 'error' in metrics:
+            st.error(f"回测失败: {metrics.get('error', '未知错误')}")
+            st.stop()
+
+        st.success("回测完成！")
+
+        # ---- 核心指标行 1 ----
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("📈 总收益率", f"{metrics['total_return']:.2f}%")
+        c2.metric("📅 年化收益", f"{metrics['annual_return']:.2f}%")
+        c3.metric("📉 最大回撤", f"{metrics['max_drawdown']:.2f}%")
+        c4.metric("📊 夏普比率", f"{metrics['sharpe_ratio']:.3f}")
+        c5.metric("🎯 胜率", f"{metrics['win_rate']:.2f}%")
+
+        # ---- 高级指标行 2 ----
+        c6, c7, c8, c9, c10 = st.columns(5)
+        c6.metric("🛡️ Calmar", f"{metrics['calmar_ratio']:.3f}",
+                  help="年化收益÷最大回撤，越高越好")
+        c7.metric("📐 Sortino", f"{metrics['sortino_ratio']:.3f}",
+                  help="仅惩罚下行波动的夏普改进版")
+        c8.metric("💰 盈亏因子", f"{metrics['profit_factor']:.3f}",
+                  help="总盈利÷总亏损，>1.5为优秀")
+        c9.metric("🔄 交易次数", metrics['total_trades'])
+        c10.metric("📋 盈亏比", f"{metrics['profit_loss_ratio']:.3f}")
+
+        # ---- 补充指标行 3 ----
+        ca, cb, cc = st.columns(3)
+        ca.metric("📊 最大连亏(次)", metrics['max_consecutive_loss'])
+        cb.metric("⏱️ 平均持仓(天)", f"{metrics['avg_hold_days']:.1f}")
+        cc.metric("💵 最终权益", f"{metrics['final_equity']:,.0f}")
+
+        # ---- 图表 ----
+        st.markdown("---")
+        st.plotly_chart(plot_equity(equity), use_container_width=True)
+        plot_kline_with_signals(df_signal, trades)
+        st.plotly_chart(plot_drawdown(equity), use_container_width=True)
+
+        # ---- 明细 & 导出 ----
+        cd1, cd2 = st.columns(2)
+        with cd1:
+            with st.expander("📋 交易明细"):
+                st.dataframe(trades, use_container_width=True)
+        with cd2:
+            with st.expander("📊 完整绩效指标"):
+                st.dataframe(
+                    pd.DataFrame([metrics]).T.rename(columns={0: '数值'}),
+                    use_container_width=True
+                )
+
+        st.markdown("---")
+        ce1, ce2 = st.columns(2)
+        with ce1:
+            csv_t = trades.to_csv(index=False) if not trades.empty else ""
+            st.download_button(
+                "📥 导出交易明细 CSV", data=csv_t,
+                file_name=f"trades_{symbol}_{start_str}_{end_str}.csv",
+                mime="text/csv", disabled=trades.empty, use_container_width=True
+            )
+        with ce2:
+            st.download_button(
+                "📥 导出绩效指标 CSV",
+                data=pd.DataFrame([metrics]).to_csv(index=False),
+                file_name=f"metrics_{symbol}_{start_str}_{end_str}.csv",
+                mime="text/csv", use_container_width=True
+            )
+
+    else:
+        # ---- 空状态引导 ----
+        st.info("👈 在左侧配置股票与资金，选择策略后点击「运行回测」")
+
+        col_w1, col_w2, col_w3 = st.columns(3)
+        with col_w1:
             st.markdown("""
-            **你可以描述任何交易逻辑，例如：**
-            - "当5日均线上穿20日均线时买入"（趋势跟踪）
-            - "RSI低于30时买入，高于70时卖出"（超买超卖）
-            - "MACD金叉且成交量放大时买入"（量价配合）
-            - "价格突破布林带上轨且成交量放大时买入"（波动率突破）
-            - "当过去5天收盘价全部高于20日均线时买入"（形态识别）
-            - "当股价创52周新高且成交量显著放大时买入"（事件驱动）
-            - "当两只股票价格比偏离历史均值2个标准差时买入"（统计套利）
+            ### 📈 内置策略
+            - **右侧趋势**：均线多头 + MACD金叉 + 放量突破
+            - **V型反转**：急跌企稳 + 放量反弹捕捉
+            """)
+        with col_w2:
+            st.markdown("""
+            ### ✏️ 自定义策略
+            - 编写 `generate_signal(df)` 函数
+            - 支持任意 Python 库
+            - 实时验证与回测
+            """)
+        with col_w3:
+            st.markdown("""
+            ### 🤖 AI 策略
+            - 自然语言描述交易逻辑
+            - DeepSeek 自动生成代码
+            - 在「策略工坊」页面使用
             """)
 
-            # 显示聊天历史（过滤 system 消息）
-            for msg in st.session_state.deepseek_messages:
-                if msg["role"] == "system":
-                    continue
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
 
-            # 聊天输入框
-            if prompt := st.chat_input("描述你的交易策略..."):
-                st.session_state.deepseek_messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+# ============================================================
+# Page 2: 🤖 策略工坊（AI 生成 + 手动编辑器 + 模板库）
+# ============================================================
+def workshop_page():
+    st.title("🤖 策略工坊")
+    st.markdown("使用 AI 对话生成策略，或手动编写——生成的策略可在「策略回测」页面直接使用")
 
-                with st.chat_message("assistant"):
-                    with st.spinner("⏳ 正在生成策略代码..."):
-                        api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
-                            m for m in st.session_state.deepseek_messages if m["role"] != "system"
-                        ]
-                        response = call_deepseek(api_messages)
-                        if response.startswith("[ERROR]"):
-                            st.error(response)
-                        else:
-                            # 显示生成的代码（仅展示，不可编辑）
-                            st.code(response, language="python")
-                            st.session_state.generated_code = response
-                            st.session_state.ai_edited_code = response  # 同步更新可编辑区域
-                            st.session_state.deepseek_messages.append({"role": "assistant", "content": response})
-                            # 提取并验证
-                            code = extract_code(response)
-                            is_valid, msg = validate_strategy_code(code)
-                            if is_valid:
-                                st.session_state.custom_strategy_code = code
-                                st.success("✅ 策略代码已自动提取并保存，可点击「运行回测」执行。")
-                            else:
-                                st.warning(f"⚠️ 代码验证: {msg}，您可以手动编辑后使用。")
+    if not st.session_state.get("deepseek_api_key"):
+        st.warning("⚠️ 请先在「策略回测」页面侧边栏底部设置 DeepSeek API Key")
+        return
 
-            # 显示可编辑的代码区域（如果有生成）
-            if st.session_state.generated_code:
-                st.subheader("📝 生成的策略代码（可编辑）")
-                edited_code = st.text_area(
-                    "你可以直接修改代码，然后点击下方按钮保存",
-                    value=st.session_state.generated_code,
-                    height=250,
-                    key="ai_edited_code"
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ 使用此策略回测", key="use_ai_code"):
-                        code = extract_code(edited_code) if edited_code != st.session_state.generated_code else st.session_state.generated_code
+    tab_ai, tab_manual = st.tabs(["🤖 AI 对话生成", "💻 手动代码编辑器"])
+
+    # ================================================================
+    # Tab 1: AI 对话生成
+    # ================================================================
+    with tab_ai:
+        # 显示聊天历史
+        for msg in st.session_state.deepseek_messages:
+            if msg["role"] == "system":
+                continue
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # 聊天输入
+        if prompt := st.chat_input("用自然语言描述你的交易策略..."):
+            st.session_state.deepseek_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("⏳ DeepSeek 正在生成策略代码..."):
+                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+                        m for m in st.session_state.deepseek_messages if m["role"] != "system"
+                    ]
+                    response = call_deepseek(api_messages)
+                    if response.startswith("[ERROR]"):
+                        st.error(response)
+                    else:
+                        st.code(response, language="python")
+                        st.session_state.generated_code = response
+                        st.session_state.deepseek_messages.append(
+                            {"role": "assistant", "content": response}
+                        )
+                        code = extract_code(response)
                         is_valid, msg = validate_strategy_code(code)
                         if is_valid:
                             st.session_state.custom_strategy_code = code
-                            st.success("策略已保存，点击底部「运行回测」执行")
+                            st.session_state.active_strategy_name = "AI生成策略"
+                            st.success("✅ 策略已自动保存！切换到「策略回测」页面，选择 🤖 AI 即可回测")
                         else:
-                            st.error(f"代码验证失败: {msg}")
-                with col2:
-                    if st.button("🔄 重新生成", key="regenerate_ai"):
-                        if len(st.session_state.deepseek_messages) > 1 and st.session_state.deepseek_messages[-1]["role"] == "assistant":
-                            st.session_state.deepseek_messages.pop()
-                            st.session_state.generated_code = ""
-                            st.session_state.ai_edited_code = ""  # 同步清除
-                            st.session_state.custom_strategy_code = ""
-                            st.rerun()
+                            st.warning(f"⚠️ 代码需手动调整: {msg}")
 
-    # ---- 交易参数（始终显示） ----
-    st.subheader("交易参数")
-    initial_cash = st.number_input("初始资金", value=100000, step=10000)
-    stop_loss = st.slider("止损比例", 0.05, 0.15, 0.08, 0.01)
-    take_profit = st.slider("止盈比例", 0.10, 0.40, 0.20, 0.05)
-    trailing_stop = st.slider("移动止损", 0.00, 0.10, 0.05, 0.01)
-    position_pct = st.slider("单次建仓比例", 0.10, 0.99, 0.30, 0.05)
+        # 代码编辑区（生成后显示）
+        if st.session_state.generated_code:
+            st.markdown("---")
+            st.subheader("📝 代码微调")
+            edited_code = st.text_area(
+                "编辑后点击保存", value=st.session_state.generated_code,
+                height=250, key="ai_edited_code"
+            )
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("💾 保存修改", key="save_ai_code", use_container_width=True):
+                    code = extract_code(edited_code)
+                    is_valid, msg = validate_strategy_code(code)
+                    if is_valid:
+                        st.session_state.custom_strategy_code = code
+                        st.session_state.generated_code = edited_code
+                        st.session_state.active_strategy_name = "AI生成策略"
+                        st.success("已保存！去「策略回测」页面使用")
+                    else:
+                        st.error(f"验证失败: {msg}")
+            with c2:
+                if st.button("🔄 重新生成", key="regenerate_ai", use_container_width=True):
+                    if len(st.session_state.deepseek_messages) > 1 and \
+                       st.session_state.deepseek_messages[-1]["role"] == "assistant":
+                        st.session_state.deepseek_messages.pop()
+                        st.session_state.generated_code = ""
+                        st.session_state.custom_strategy_code = ""
+                        st.rerun()
+            with c3:
+                if st.button("🗑️ 清空对话", key="clear_chat", use_container_width=True):
+                    st.session_state.deepseek_messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT}
+                    ]
+                    st.session_state.generated_code = ""
+                    st.rerun()
 
-    run_btn = st.button("🚀 运行回测", type="primary")
+    # ================================================================
+    # Tab 2: 手动代码编辑器
+    # ================================================================
+    with tab_manual:
+        st.markdown("### 💻 手动编写策略")
+        st.markdown("定义 `generate_signal(df)` 函数，`df` 为包含 open/high/low/close/volume 的 DataFrame")
 
-
-# ============================================================
-# 主界面：回测执行与结果展示
-# ============================================================
-if run_btn:
-    # ---- 获取数据 ----
-    with st.spinner("正在获取数据..."):
-        df = fetch_stock_data(symbol, start_str, end_str)
-    if df is None or df.empty:
-        st.error("无法获取数据，请检查股票代码或网络")
-        st.stop()
-
-    # ---- 生成信号 ----
-    with st.spinner("生成策略信号..."):
-        if strategy_type == "右侧趋势策略":
-            df_signal = generate_right_signal(df, ma_short, ma_mid, ma_long, vol_ratio)
-        elif strategy_type == "V型反转策略":
-            df_signal = generate_v_shape_signal(df, lookback, drop_threshold, rebound_threshold, vol_ratio)
-        elif strategy_type == "自定义策略":
-            if not user_code:
-                st.error("请先编写策略代码")
-                st.stop()
-            try:
-                local_namespace = {}
-                exec(user_code, {}, local_namespace)
-                if 'generate_signal' not in local_namespace:
-                    st.error("未找到名为 'generate_signal' 的函数。")
-                    st.stop()
-                generate_signal = local_namespace['generate_signal']
-                df_signal = generate_signal(df)
-                if not isinstance(df_signal, pd.DataFrame):
-                    st.error("策略函数必须返回 DataFrame。")
-                    st.stop()
-                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
-                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列。")
-                    st.stop()
-                df_signal['signal'] = df_signal['signal'].astype(bool)
-            except Exception as e:
-                st.error(f"策略代码执行出错: {e}")
-                st.stop()
-        elif strategy_type == "🤖 AI 生成策略":
-            code = st.session_state.get("custom_strategy_code", "")
-            if not code:
-                st.error("请先生成或输入策略代码")
-                st.stop()
-            try:
-                local_namespace = {}
-                exec(code, {}, local_namespace)
-                if 'generate_signal' not in local_namespace:
-                    st.error("未找到 generate_signal 函数")
-                    st.stop()
-                generate_signal = local_namespace['generate_signal']
-                df_signal = generate_signal(df)
-                if 'signal' not in df_signal.columns or 'signal_type' not in df_signal.columns:
-                    st.error("返回的 DataFrame 缺少 'signal' 或 'signal_type' 列")
-                    st.stop()
-                df_signal['signal'] = df_signal['signal'].astype(bool)
-            except Exception as e:
-                st.error(f"策略执行出错: {e}")
-                st.stop()
-        else:
-            st.error("未知策略类型")
-            st.stop()
-
-    # ---- 运行回测 ----
-    with st.spinner("运行回测..."):
-        max_hold = 20 if strategy_type == "V型反转策略" else 999
-        trades, equity, metrics = run_backtest(
-            df_signal,
-            initial_cash=initial_cash,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            trailing_stop=trailing_stop,
-            position_pct=position_pct,
-            max_hold_days=max_hold
+        default_code = """def generate_signal(df):
+    import pandas as pd
+    import numpy as np
+    data = df.copy()
+    # ==== 在此编写你的策略逻辑 ====
+    data['MA5'] = data['close'].rolling(5).mean()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+    data['signal_type'] = 'custom'
+    return data
+"""
+        manual_code = st.text_area(
+            "策略代码",
+            value=default_code,
+            height=350,
+            key="manual_code_editor"
         )
 
-    if trades is None or 'error' in metrics:
-        st.error(f"回测失败: {metrics.get('error', '未知错误')}")
-        st.stop()
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("💾 保存并设为当前策略", type="primary", key="save_manual", use_container_width=True):
+                is_valid, msg = validate_strategy_code(manual_code)
+                if is_valid:
+                    st.session_state.custom_strategy_code = manual_code
+                    st.session_state.active_strategy_name = "手动编写策略"
+                    st.success("✅ 已保存！切换到「策略回测」页面，选择 ✏️ 自定义即可")
+                else:
+                    st.error(f"验证失败: {msg}")
+        with c2:
+            if st.button("🧪 语法检查", key="test_manual", use_container_width=True):
+                is_valid, msg = validate_strategy_code(manual_code)
+                if is_valid:
+                    st.success("✅ 语法正确，generate_signal 函数定义完整")
+                else:
+                    st.error(f"❌ {msg}")
 
-    st.success("回测完成！")
+        # ---- 策略模板库 ----
+        with st.expander("📚 策略模板库（点击加载）"):
+            templates = {
+                "双均线金叉": """def generate_signal(df):
+    import pandas as pd
+    data = df.copy()
+    data['MA5'] = data['close'].rolling(5).mean()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['signal'] = (data['MA5'] > data['MA20']) & (data['MA5'].shift(1) <= data['MA20'].shift(1))
+    data['signal_type'] = 'custom'
+    return data""",
+                "MACD金叉": """def generate_signal(df):
+    import pandas as pd
+    data = df.copy()
+    e1 = data['close'].ewm(span=12, adjust=False).mean()
+    e2 = data['close'].ewm(span=26, adjust=False).mean()
+    data['DIF'] = e1 - e2
+    data['DEA'] = data['DIF'].ewm(span=9, adjust=False).mean()
+    data['MACD'] = (data['DIF'] - data['DEA']) * 2
+    data['signal'] = (data['DIF'] > data['DEA']) & (data['DIF'].shift(1) <= data['DEA'].shift(1))
+    data['signal_type'] = 'custom'
+    return data""",
+                "RSI超卖反弹": """def generate_signal(df):
+    import pandas as pd
+    import numpy as np
+    data = df.copy()
+    delta = data['close'].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    data['RSI'] = 100 - (100 / (1 + gain / loss))
+    data['signal'] = (data['RSI'] < 30) & (data['RSI'].shift(1) >= 30)
+    data['signal_type'] = 'custom'
+    return data""",
+                "布林带突破": """def generate_signal(df):
+    import pandas as pd
+    import numpy as np
+    data = df.copy()
+    data['MA20'] = data['close'].rolling(20).mean()
+    data['STD'] = data['close'].rolling(20).std()
+    data['Upper'] = data['MA20'] + 2 * data['STD']
+    data['signal'] = (data['close'] > data['Upper']) & (data['volume'] > data['volume'].rolling(20).mean() * 1.5)
+    data['signal_type'] = 'custom'
+    return data""",
+                "放量突破": """def generate_signal(df):
+    import pandas as pd
+    data = df.copy()
+    data['VOL_MA20'] = data['volume'].rolling(20).mean()
+    data['RET'] = data['close'].pct_change()
+    data['signal'] = (data['volume'] > data['VOL_MA20'] * 2) & (data['RET'] > 0.02)
+    data['signal_type'] = 'custom'
+    return data""",
+            }
 
-    # ---- 显示核心指标 ----
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("总收益率", f"{metrics['total_return']:.2f}%")
-    col2.metric("年化收益率", f"{metrics['annual_return']:.2f}%")
-    col3.metric("最大回撤", f"{metrics['max_drawdown']:.2f}%")
-    col4.metric("夏普比率", f"{metrics['sharpe_ratio']:.3f}")
+            tmpl_names = list(templates.keys())
+            cols_per_row = 3
+            for row_start in range(0, len(tmpl_names), cols_per_row):
+                row_names = tmpl_names[row_start:row_start + cols_per_row]
+                cols = st.columns(len(row_names))
+                for i, name in enumerate(row_names):
+                    with cols[i]:
+                        if st.button(f"📋 {name}", key=f"tmpl_{row_start + i}", use_container_width=True):
+                            st.session_state.generated_code = templates[name]
+                            st.session_state.custom_strategy_code = templates[name]
+                            st.session_state.active_strategy_name = name
+                            st.success(f"✅ 已加载「{name}」模板")
+                            st.rerun()
 
-    col5, col6, col7, col8 = st.columns(4)
-    col5.metric("总交易次数", metrics['total_trades'])
-    col6.metric("胜率", f"{metrics['win_rate']:.2f}%")
-    col7.metric("盈亏比", f"{metrics['profit_loss_ratio']:.3f}")
-    col8.metric("平均持仓(天)", f"{metrics['avg_hold_days']:.1f}")
 
-    # ---- 图表 ----
-    st.plotly_chart(plot_equity(equity), use_container_width=True)
-    plot_kline_with_signals(df_signal, trades)
-    st.plotly_chart(plot_drawdown(equity), use_container_width=True)
+# ---- 顶部导航栏 ----
+if "_current_page" not in st.session_state:
+    st.session_state["_current_page"] = "backtest"
 
-    # ---- 交易明细与详细指标 ----
-    with st.expander("📋 查看交易明细"):
-        st.dataframe(trades, use_container_width=True)
+nav_col1, nav_col2 = st.columns(2)
+with nav_col1:
+    btn_type_bt = "primary" if st.session_state["_current_page"] == "backtest" else "secondary"
+    if st.button("📊 策略回测", use_container_width=True, type=btn_type_bt, key="nav_btn_backtest"):
+        st.session_state["_current_page"] = "backtest"
+        st.rerun()
+with nav_col2:
+    btn_type_ws = "primary" if st.session_state["_current_page"] == "workshop" else "secondary"
+    if st.button("🤖 策略工坊", use_container_width=True, type=btn_type_ws, key="nav_btn_workshop"):
+        st.session_state["_current_page"] = "workshop"
+        st.rerun()
 
-    with st.expander("📊 详细绩效指标"):
-        metrics_df = pd.DataFrame([metrics]).T.rename(columns={0: '数值'})
-        st.dataframe(metrics_df, use_container_width=True)
+st.markdown("---")
 
+if st.session_state["_current_page"] == "backtest":
+    backtest_page()
 else:
-    st.info("👈 请在左侧设置参数后点击「运行回测」")
+    workshop_page()
