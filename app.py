@@ -28,7 +28,7 @@ except ImportError:
 
 # 本地模块导入
 from config import SYSTEM_PROMPT
-from deepseek_api import call_deepseek, extract_code, validate_strategy_code
+from deepseek_api import call_deepseek, extract_code, validate_strategy_code, ensure_dependencies
 from data_loader import fetch_stock_data
 from strategies import generate_right_signal, generate_v_shape_signal
 from backtest import run_backtest
@@ -282,6 +282,11 @@ def _execute_backtest(symbol, start_str, end_str, initial_cash,
                 st.error("请先准备策略代码（在「策略工坊」页面生成或编写）")
                 st.stop()
             try:
+                # 自动安装代码中引用的缺失库
+                installed = ensure_dependencies(code)
+                if installed:
+                    st.info(f"📦 自动安装了缺失库: {', '.join(installed)}")
+
                 local_namespace = {}
                 exec(code, {}, local_namespace)
                 if 'generate_signal' not in local_namespace:

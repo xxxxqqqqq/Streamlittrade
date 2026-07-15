@@ -44,16 +44,26 @@ def call_deepseek(messages, model="deepseek-v4-pro", temperature=0.1, max_tokens
         "max_tokens": max_tokens
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()  # 非 200 状态码会抛出异常
-        return response.json()["choices"][0]["message"]["content"]
-    except requests.exceptions.Timeout:
-        return "[ERROR] API 请求超时，请检查网络连接"
-    except requests.exceptions.HTTPError as e:
-        return f"[ERROR] API 返回错误: {e.response.status_code}"
-    except Exception as e:
-        return f"[ERROR] API 调用失败: {e}"
+    # ---- 带重试的 API 调用 ----
+    import time as _time
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except requests.exceptions.Timeout:
+            if attempt < max_retries:
+                _time.sleep(2)
+                continue
+            return f"[ERROR] API 请求超时（已重试{max_retries}次），v4-pro 模型推理较慢，请稍后再试"
+        except requests.exceptions.HTTPError as e:
+            return f"[ERROR] API 返回错误: {e.response.status_code}"
+        except Exception as e:
+            if attempt < max_retries:
+                _time.sleep(2)
+                continue
+            return f"[ERROR] API 调用失败: {e}"
 
 
 # ============================================================
@@ -127,3 +137,83 @@ def validate_strategy_code(code):
         return False, "generate_signal 函数缺少 return 语句"
 
     return True, "代码验证通过"
+
+
+# ============================================================
+# 依赖自动安装工具
+# ============================================================
+
+# 常用 import 名 → pip 包名的映射（处理命名不一致的情况）
+_PIP_NAME_MAP = {
+    'sklearn': 'scikit-learn',
+    'PIL': 'pillow',
+    'bs4': 'beautifulsoup4',
+    'cv2': 'opencv-python',
+    'statsmodels': 'statsmodels',
+    'scipy': 'scipy',
+}
+
+
+def ensure_dependencies(code):
+    """
+    扫描策略代码中的所有 import 语句，自动安装缺失的第三方库
+
+    仅对非标准库进行检测和安装。对于映射表中已知的包名不一致问题
+    （如 import sklearn → pip install scikit-learn），自动修正。
+
+    Args:
+        code: 策略代码字符串
+
+    Returns:
+        list: 已安装（或尝试安装）的包名列表，用于 UI 提示
+    """
+    import sys as _sys
+    import subprocess as _sp
+    import re as _re
+
+    # 提取所有 import xxx 和 from xxx import 语句中的顶级包名
+    imports = _re.findall(r'^\s*(?:import|from)\s+(\w+)', code, _re.MULTILINE)
+
+    # 标准库白名单（不需要安装）
+    stdlib = {
+        'pandas', 'numpy', 're', 'os', 'sys', 'math', 'time', 'json',
+        'datetime', 'collections', 'itertools', 'functools', 'random',
+        'warnings', 'typing', 'abc', 'copy', 'hashlib', 'io', 'logging',
+        'pathlib', 'pickle', 'pprint', 'queue', 'statistics', 'string',
+        'subprocess', 'threading', 'traceback', 'unittest', 'urllib',
+        'xml', 'csv', 'enum', 'gc', 'inspect', 'operator', 'textwrap',
+        '__future__', 'ast', 'base64', 'bisect', 'calendar', 'cmath',
+        'concurrent', 'contextlib', 'dataclasses', 'decimal', 'fractions',
+        'glob', 'gzip', 'html', 'http', 'importlib', 'ipaddress',
+        'multiprocessing', 'numbers', 'platform', 'secrets', 'shutil',
+        'socket', 'sqlite3', 'struct', 'tempfile', 'uuid', 'zipfile',
+    }
+
+    installed_list = []
+
+    for lib_name in imports:
+        # 跳过标准库
+        if lib_name in stdlib:
+            continue
+
+        # 尝试导入，已安装则跳过
+        try:
+            __import__(lib_name)
+            continue
+        except ImportError:
+            pass
+
+        # 查找正确的 pip 包名
+        pip_name = _PIP_NAME_MAP.get(lib_name, lib_name)
+
+        # 调用 pip install
+        try:
+            _sp.check_call(
+                [_sys.executable, "-m", "pip", "install", pip_name, "-q"],
+                timeout=60
+            )
+            installed_list.append(pip_name)
+        except Exception:
+            pass  # 安装失败静默处理，exec 时会报具体 ImportError
+
+    return installed_list
