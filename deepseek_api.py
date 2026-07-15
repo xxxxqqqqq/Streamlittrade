@@ -143,38 +143,22 @@ def validate_strategy_code(code):
 # 依赖自动安装工具
 # ============================================================
 
-# 常用 import 名 → pip 包名的映射（处理命名不一致的情况）
-_PIP_NAME_MAP = {
-    'sklearn': 'scikit-learn',
-    'PIL': 'pillow',
-    'bs4': 'beautifulsoup4',
-    'cv2': 'opencv-python',
-    'statsmodels': 'statsmodels',
-    'scipy': 'scipy',
-}
-
-
 def ensure_dependencies(code):
     """
-    扫描策略代码中的所有 import 语句，自动安装缺失的第三方库
-
-    仅对非标准库进行检测和安装。对于映射表中已知的包名不一致问题
-    （如 import sklearn → pip install scikit-learn），自动修正。
+    扫描策略代码中所有 import，自动安装缺失库，静默 pip 警告噪音
 
     Args:
         code: 策略代码字符串
 
     Returns:
-        list: 已安装（或尝试安装）的包名列表，用于 UI 提示
+        tuple: (installed_list, blocked_list)
     """
     import sys as _sys
     import subprocess as _sp
     import re as _re
 
-    # 提取所有 import xxx 和 from xxx import 语句中的顶级包名
     imports = _re.findall(r'^\s*(?:import|from)\s+(\w+)', code, _re.MULTILINE)
 
-    # 标准库白名单（不需要安装）
     stdlib = {
         'pandas', 'numpy', 're', 'os', 'sys', 'math', 'time', 'json',
         'datetime', 'collections', 'itertools', 'functools', 'random',
@@ -192,11 +176,86 @@ def ensure_dependencies(code):
     installed_list = []
 
     for lib_name in imports:
-        # 跳过标准库
         if lib_name in stdlib:
             continue
+        try:
+            __import__(lib_name)
+            continue
+        except ImportError:
+            pass
 
-        # 尝试导入，已安装则跳过
+        # 静默安装，--no-deps 跳过依赖冲突检查，stderr 丢弃噪音
+        try:
+            _sp.check_call(
+                [_sys.executable, "-m", "pip", "install", lib_name,
+                 "--no-deps", "-q"],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                timeout=60
+            )
+            installed_list.append(lib_name)
+        except Exception:
+            pass
+
+    return installed_list
+
+
+# ============================================================
+# 依赖自动安装工具
+# ============================================================
+
+# 常用 import 名 → pip 包名的映射（处理命名不一致的情况）
+_PIP_NAME_MAP = {
+    'sklearn': 'scikit-learn',
+    'PIL': 'pillow',
+    'bs4': 'beautifulsoup4',
+    'cv2': 'opencv-python',
+    'statsmodels': 'statsmodels',
+    'scipy': 'scipy',
+}
+
+
+
+def check_missing_imports(code):
+    """
+    扫描策略代码中的 import 语句，检测未安装的第三方库
+
+    仅检查非标准库。对于映射表中包名不一致的情况（如 import sklearn → pip install scikit-learn），
+    自动修正为正确的 pip 包名。
+
+    Args:
+        code: 策略代码字符串
+
+    Returns:
+        list[str]: 缺失的 pip 包名列表（如 ['fastapi', 'scikit-learn']），空列表表示全部已安装
+    """
+    import re as _re
+
+    # 提取所有 import xxx 和 from xxx import 语句中的顶级包名
+    imports = _re.findall(r'^\s*(?:import|from)\s+(\w+)', code, _re.MULTILINE)
+
+    # 标准库白名单
+    _STDLIB = {
+        'pandas', 'numpy', 're', 'os', 'sys', 'math', 'time', 'json',
+        'datetime', 'collections', 'itertools', 'functools', 'random',
+        'warnings', 'typing', 'abc', 'copy', 'hashlib', 'io', 'logging',
+        'pathlib', 'pickle', 'pprint', 'queue', 'statistics', 'string',
+        'subprocess', 'threading', 'traceback', 'unittest', 'urllib',
+        'xml', 'csv', 'enum', 'gc', 'inspect', 'operator', 'textwrap',
+        '__future__', 'ast', 'base64', 'bisect', 'calendar', 'cmath',
+        'concurrent', 'contextlib', 'dataclasses', 'decimal', 'fractions',
+        'glob', 'gzip', 'html', 'http', 'importlib', 'ipaddress',
+        'multiprocessing', 'numbers', 'platform', 'secrets', 'shutil',
+        'socket', 'sqlite3', 'struct', 'tempfile', 'uuid', 'zipfile',
+    }
+
+    missing = []
+
+    for lib_name in imports:
+        # 跳过标准库
+        if lib_name in _STDLIB:
+            continue
+
+        # 尝试导入，成功则跳过
         try:
             __import__(lib_name)
             continue
@@ -204,16 +263,8 @@ def ensure_dependencies(code):
             pass
 
         # 查找正确的 pip 包名
-        pip_name = _PIP_NAME_MAP.get(lib_name, lib_name)
+        pip_name = _PIP_NAME_MAP.get(lib_name, lib_name).lower()
+        if pip_name not in missing:
+            missing.append(pip_name)
 
-        # 调用 pip install
-        try:
-            _sp.check_call(
-                [_sys.executable, "-m", "pip", "install", pip_name, "-q"],
-                timeout=60
-            )
-            installed_list.append(pip_name)
-        except Exception:
-            pass  # 安装失败静默处理，exec 时会报具体 ImportError
-
-    return installed_list
+    return missing
