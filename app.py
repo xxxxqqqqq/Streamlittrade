@@ -327,13 +327,13 @@ def _execute_backtest(symbol, start_str, end_str, initial_cash,
         st.stop()
 
     st.success("回测完成！")
-    _render_results(symbol, start_str, end_str, df_signal, trades, equity, metrics)
+    _render_results(symbol, start_str, end_str, df_signal, trades, equity, metrics, initial_cash)
 
 
 # ============================================================
 # 4. 结果渲染
 # ============================================================
-def _render_results(symbol, start_str, end_str, df_signal, trades, equity, metrics):
+def _render_results(symbol, start_str, end_str, df_signal, trades, equity, metrics, initial_cash):
     """渲染回测结果：指标卡片、图表、交易明细、导出按钮"""
     # 核心指标行 1
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -362,7 +362,7 @@ def _render_results(symbol, start_str, end_str, df_signal, trades, equity, metri
 
     # 图表
     st.markdown("---")
-    st.plotly_chart(plot_equity(equity), use_container_width=True)
+    st.components.v1.html(plot_equity(equity, initial_cash), height=450, scrolling=False)
     plot_kline_with_signals(df_signal, trades)
     st.plotly_chart(plot_drawdown(equity), use_container_width=True)
 
