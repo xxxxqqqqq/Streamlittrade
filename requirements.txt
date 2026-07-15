@@ -84,3 +84,5 @@ yarl==1.20.1
 zipp==3.20.1
 python-dotenv
 openai
+scipy
+streamlit-ace
