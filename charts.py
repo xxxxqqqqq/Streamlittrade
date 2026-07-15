@@ -10,35 +10,166 @@ import json
 
 
 # ============================================================
-# 图表一：净值曲线（Plotly）
+# 图表一：净值曲线（Highcharts 同花顺风格）
 # ============================================================
 
-def plot_equity(equity_series):
+def plot_equity(equity_series, initial_cash=None):
     """
-    绘制回测净值曲线 —— 使用 Plotly 平滑折线图
+    绘制回测净值曲线 —— Highcharts 同花顺风格
+    渐变面积填充 + 初始资金参考线 + 十字光标 + 简洁网格
 
     Args:
         equity_series: pd.Series，索引为日期，值为每日权益
+        initial_cash:  初始资金（用于画参考线），默认取序列第一个值
 
     Returns:
-        plotly.graph_objects.Figure
+        str: Highcharts HTML 字符串
     """
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=equity_series.index,
-        y=equity_series,
-        mode='lines',
-        name='净值',
-        line=dict(color='#1f77b4', width=2.5),  # 蓝线
-        line_shape='spline'                       # 平滑曲线
-    ))
-    fig.update_layout(
-        title='净值曲线',
-        height=400,
-        margin=dict(l=40, r=40, t=40, b=40)
-    )
-    fig.update_yaxes(title_text="净值")
-    return fig
+    import json as _json
+
+    # 如果未指定初始资金，取序列第一个值
+    ref_value = initial_cash if initial_cash else round(float(equity_series.iloc[0]), 2)
+    final_value = round(float(equity_series.iloc[-1]), 2)
+    is_profit = final_value >= ref_value
+
+    # ---- 检测主题 ----
+    try:
+        bg_check = st.get_option('theme.backgroundColor')
+        is_dark = (bg_check or '') in ('#0e1117', '#0d1117', '#0a0a0a', '#000000')
+    except Exception:
+        is_dark = True
+
+    if is_dark:
+        BG = '#0d1117'
+        TEXT = '#94a3b8'
+        GRID = '#1e293b'
+        CROSSHAIR = '#334155'
+        LINE_COLOR = '#60a5fa'     # 蓝线
+        FILL_TOP = 'rgba(96,165,250,0.25)'
+        FILL_BOTTOM = 'rgba(96,165,250,0.02)'
+    else:
+        BG = '#ffffff'
+        TEXT = '#475569'
+        GRID = '#e2e8f0'
+        CROSSHAIR = '#cbd5e1'
+        LINE_COLOR = '#2563eb'     # 蓝线
+        FILL_TOP = 'rgba(37,99,235,0.15)'
+        FILL_BOTTOM = 'rgba(37,99,235,0.01)'
+
+    # ---- 转换数据为 Highcharts 格式 ----
+    points = []
+    for idx, val in equity_series.items():
+        ts = int(idx.timestamp() * 1000)
+        points.append([ts, round(float(val), 2)])
+
+    # ---- 标题：左标题 + 右金额（用 subtitle 分离，避免重叠）----
+    profit_pct = round((final_value - ref_value) / ref_value * 100, 2)
+    sign = '+' if profit_pct >= 0 else ''
+    pct_color = LINE_COLOR if profit_pct >= 0 else '#ef4444'
+    title_text = '净值曲线'
+    subtitle_text = f'<span style="font-size:14px;color:{pct_color}">Y{final_value:,.0f} &nbsp; {sign}{profit_pct}%</span>'
+
+    html = f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.bootcdn.net/ajax/libs/highcharts/11.4.0/highstock.js"></script>
+<style>
+*{{margin:0;padding:0}}
+html,body{{width:100%;height:100%;background:transparent;overflow:hidden}}
+#ec{{width:100%;height:100%}}
+.hc-title{{display:flex;justify-content:space-between;align-items:center}}
+</style></head>
+<body><div id="ec"></div>
+<script>
+(function(){{
+var points={_json.dumps(points)};
+var refVal={ref_value};
+
+Highcharts.setOptions({{
+  lang:{{
+    months:['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'],
+    shortMonths:['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+    weekdays:['星期日','星期一','星期二','星期三','星期四','星期五','星期六']
+  }}
+}});
+
+Highcharts.stockChart('ec',{{
+  chart:{{
+    backgroundColor:'transparent',spacing:[15,15,8,8],
+    panning:{{enabled:true,type:'x'}},zoomType:'',
+    marginRight:15,marginTop:45
+  }},
+  title:{{
+    text:'{title_text}',align:'left',x:0,
+    style:{{color:'{TEXT}',fontSize:'15px',fontWeight:'bold'}},
+    floating:true,y:12
+  }},
+  subtitle:{{
+    text:'{subtitle_text}',align:'right',x:0,useHTML:true,
+    style:{{color:'{TEXT}',fontSize:'14px'}},
+    floating:true,y:12
+  }},
+  rangeSelector:{{enabled:false}},
+  navigator:{{
+    enabled:true,height:36,maskFill:'rgba(128,128,128,0.15)',
+    margin:30,
+    series:{{type:'area',color:'{LINE_COLOR}',fillColor:'{FILL_TOP}',lineWidth:1}},
+    xAxis:{{labels:{{style:{{color:'{TEXT}',fontSize:'10px'}}}},gridLineColor:'{GRID}'}},
+    handles:{{backgroundColor:'#666',borderColor:'#999'}}
+  }},
+  scrollbar:{{enabled:false}},
+  credits:{{enabled:false}},
+  tooltip:{{
+    split:false,shared:true,
+    backgroundColor:'{BG}',borderColor:'{CROSSHAIR}',
+    style:{{color:'{TEXT}',fontSize:'12px'}},
+    xDateFormat:'%Y年%m月%d日',
+    headerFormat:'<b>{{point.key}}</b><br/>',
+    pointFormat:'净值: <b>¥{{point.y:,.2f}}</b>'
+  }},
+  crosshair:{{
+    color:'{CROSSHAIR}',dashStyle:'dash',
+    label:{{enabled:true,style:{{color:'{TEXT}'}}}}
+  }},
+  plotOptions:{{
+    series:{{states:{{inactive:{{opacity:1}}}}}},
+    area:{{marker:{{enabled:false,states:{{hover:{{enabled:true,radius:4}}}}}}}}
+  }},
+  legend:{{enabled:false}},
+  yAxis:[{{
+    labels:{{align:'left',x:0,style:{{color:'{TEXT}',fontSize:'12px'}},format:'{{value:,.0f}}'}},
+    gridLineColor:'{GRID}',gridLineWidth:0.5,
+    opposite:false,lineColor:'{GRID}',tickColor:'{TEXT}',
+    showFirstLabel:true,showLastLabel:true,
+    minPadding:0.08,maxPadding:0.08,
+    plotLines:[{{
+      value:refVal,color:'{CROSSHAIR}',dashStyle:'dash',width:1,zIndex:1,
+      label:{{text:'初始 Y{ref_value:,.0f}',align:'right',verticalAlign:'top',x:-8,y:-4,style:{{color:'{TEXT}',fontSize:'10px'}}}}
+    }}]
+  }}],
+  xAxis:{{
+    labels:{{style:{{color:'{TEXT}',fontSize:'11px'}}}},
+    gridLineColor:'{GRID}',lineColor:'{GRID}',tickColor:'{GRID}'
+  }},
+  series:[{{
+    type:'area',name:'净值',data:points,
+    color:'{LINE_COLOR}',lineWidth:2,
+    fillColor:{{
+      linearGradient:{{x1:0,y1:0,x2:0,y2:1}},
+      stops:[[0,'{FILL_TOP}'],[1,'{FILL_BOTTOM}']]
+    }},
+    threshold:refVal,
+    negativeColor:'#ef4444',
+    negativeFillColor:{{
+      linearGradient:{{x1:0,y1:0,x2:0,y2:1}},
+      stops:[[0,'rgba(239,68,68,0.20)'],[1,'rgba(239,68,68,0.01)']]
+    }},
+    tooltip:{{valueDecimals:2,valuePrefix:'¥'}}
+  }}]
+}});
+}})();
+</script></body></html>'''
+
+    return html
 
 
 # ============================================================
@@ -129,17 +260,28 @@ def plot_kline_with_signals(data, trades_df):
             'up': is_up
         })
 
-    # ---- 买卖标记数据（flags 系列）----
-    buys = []
-    sells = []
+    # ---- 买卖标记数据（方框标记，置于 K 线外部）----
+    buy_flags = []
+    sell_flags = []
     if trades_df is not None and not trades_df.empty:
         for _, row in trades_df.iterrows():
             ts = int(row['date'].timestamp() * 1000)
+            trade_date = row['date']
+            # 查找该交易日对应的 OHLC，用于确定标记摆放高度
+            if trade_date in data.index:
+                h_val = round(float(data.loc[trade_date, 'high']), 2)
+                l_val = round(float(data.loc[trade_date, 'low']), 2)
+            else:
+                h_val = round(float(row.get('price', 0)), 2)
+                l_val = h_val
+
             if row['action'] == 'BUY':
                 reason = row.get('entry_reason', '')
-                buys.append({
-                    'x': ts, 'title': '多',
-                    'text': f"买入 {row['price']:.2f}" + (f" ({reason})" if reason else "")
+                buy_flags.append({
+                    'x': ts,
+                    'y': h_val,           # 方框置于最高价上方
+                    'title': 'B',
+                    'text': f"买入 {row['price']:.2f}" + (f"<br/>({reason})" if reason else "")
                 })
             else:
                 profit = row.get('profit_pct', None)
@@ -148,8 +290,13 @@ def plot_kline_with_signals(data, trades_df):
                 if profit is not None:
                     txt += f" | {profit:+.2f}%"
                 if reason:
-                    txt += f" | {reason}"
-                sells.append({'x': ts, 'title': '空', 'text': txt})
+                    txt += f"<br/>({reason})"
+                sell_flags.append({
+                    'x': ts,
+                    'y': l_val,           # 方框置于最低价下方
+                    'title': 'S',
+                    'text': txt
+                })
 
     # ---- 构建 Highcharts Stock HTML ----
     html = f'''<!DOCTYPE html>
@@ -166,20 +313,33 @@ html,body{{width:100%;height:100%;background:transparent;overflow:hidden}}
 (function(){{
 var ohlc={json.dumps(ohlc)};
 var volumes={json.dumps(volumes)};
-var buys={json.dumps(buys)};
-var sells={json.dumps(sells)};
+var buyFlags={json.dumps(buy_flags)};
+var sellFlags={json.dumps(sell_flags)};
 var RED="{RED}",GREEN="{GREEN}",TEXT="{TEXT}",GRID="{GRID}",
     CROSS="{CROSSHAIR}",BG="{BG}",NAVC="{NAV_COLOR}",NAVF="{NAV_FILL}";
+
+Highcharts.setOptions({{
+  lang:{{
+    months:['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'],
+    shortMonths:['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+    weekdays:['星期日','星期一','星期二','星期三','星期四','星期五','星期六'],
+    rangeSelectorZoom:'',
+    rangeSelectorFrom:'从',
+    rangeSelectorTo:'到'
+  }}
+}});
 
 Highcharts.stockChart('hc',{{
   chart:{{
     backgroundColor:'transparent',spacing:[5,5,10,5],
-    panning:true,zoomType:'x',marginRight:10
+    panning:{{enabled:true,type:'x'}},  // 鼠标拖动=平移查看前后K线（雪球风格）
+    zoomType:'',                         // 禁用拖拽缩放，改用滚轮缩放
+    marginRight:10
   }},
   title:{{text:'K线图与买卖点',align:'left',x:0,
     style:{{color:TEXT,fontSize:'16px',fontWeight:'bold'}}}},
 
-  // ======= 范围选择器（快速切换时间范围）=======
+  // ======= 范围选择器（右上角浮动，与标题同行）=======
   rangeSelector:{{
     buttons:[
       {{type:'month',count:1,text:'1月'}},
@@ -189,7 +349,10 @@ Highcharts.stockChart('hc',{{
       {{type:'all',text:'全部'}}
     ],
     selected:4,inputEnabled:false,
-    buttonTheme:{{style:{{color:TEXT}}}}
+    buttonTheme:{{style:{{color:TEXT}}}},
+    floating:true,
+    buttonPosition:{{align:'right',x:0,y:-35}},
+    verticalAlign:'top'
   }},
 
   // ======= Navigator 迷你全景图（雪球同款）=======
@@ -201,10 +364,11 @@ Highcharts.stockChart('hc',{{
   }},
   scrollbar:{{enabled:false}},
 
-  // ======= 十字光标 =======
+  // ======= 十字光标（中文金融术语）=======
   tooltip:{{split:true,shared:true,
     backgroundColor:BG,borderColor:CROSS,
-    style:{{color:TEXT,fontSize:'12px'}}
+    style:{{color:TEXT,fontSize:'12px'}},
+    dateTimeLabelFormats:{{day:'%Y年%m月%d日'}}
   }},
   crosshair:{{color:CROSS,dashStyle:'dot'}},
 
@@ -249,7 +413,7 @@ Highcharts.stockChart('hc',{{
     // K 线主图
     id:'kline',type:'candlestick',name:'K线',data:ohlc,
     upColor:RED,color:GREEN,upLineColor:RED,lineColor:GREEN,
-    tooltip:{{valueDecimals:2}},
+    tooltip:{{pointFormat:'开盘: <b>{{point.open:.2f}}</b><br/>最高: <b>{{point.high:.2f}}</b><br/>最低: <b>{{point.low:.2f}}</b><br/>收盘: <b>{{point.close:.2f}}</b>'}},
     dataGrouping:{{enabled:true,forced:true,units:[
       ['day',[1]],['week',[1]],['month',[1]],['year',[1]]
     ]}}
@@ -259,17 +423,21 @@ Highcharts.stockChart('hc',{{
     turboThreshold:0,dataGrouping:{{enabled:true,forced:true}},
     tooltip:{{pointFormat:'成交量: <b>{{point.y:,.0f}}</b> 手'}}
   }},{{
-    // 买入标记
-    type:'flags',name:'买入',data:buys,onSeries:'kline',
-    color:RED,fillColor:'rgba(0,0,0,0)',shape:'squarepin',
-    style:{{color:RED,fontSize:'10px',fontWeight:'bold'}},
-    tooltip:{{pointFormat:'{{point.text}}'}}
+    // 买入标记 — 红色方框，置于 K 线最高价上方
+    type:'flags',name:'买入',data:buyFlags,yAxis:0,
+    color:RED,fillColor:RED,shape:'squarepin',
+    style:{{color:'#ffffff',fontSize:'11px',fontWeight:'bold'}},
+    tooltip:{{pointFormat:'{{point.text}}'}},
+    y:-30,clip:false,allowOverlapX:true,
+    width:8,zIndex:5
   }},{{
-    // 卖出标记
-    type:'flags',name:'卖出',data:sells,onSeries:'kline',
-    color:GREEN,fillColor:'rgba(0,0,0,0)',shape:'squarepin',
-    style:{{color:GREEN,fontSize:'10px',fontWeight:'bold'}},
-    tooltip:{{pointFormat:'{{point.text}}'}}
+    // 卖出标记 — 绿色方框，置于 K 线最低价下方
+    type:'flags',name:'卖出',data:sellFlags,yAxis:0,
+    color:GREEN,fillColor:GREEN,shape:'squarepin',
+    style:{{color:'#ffffff',fontSize:'11px',fontWeight:'bold'}},
+    tooltip:{{pointFormat:'{{point.text}}'}},
+    y:30,clip:false,allowOverlapX:true,
+    width:8,zIndex:5
   }}]
 }});
 }})();
