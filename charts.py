@@ -74,7 +74,7 @@ def plot_equity(equity_series, initial_cash=None):
 <script src="https://cdn.bootcdn.net/ajax/libs/highcharts/11.4.0/highstock.js"></script>
 <style>
 *{{margin:0;padding:0}}
-html,body{{width:100%;height:100%;background:transparent;overflow:hidden}}
+html,body{{width:100%;height:100%;background:transparent}}
 #ec{{width:100%;height:100%}}
 .hc-title{{display:flex;justify-content:space-between;align-items:center}}
 </style></head>
@@ -95,7 +95,8 @@ Highcharts.setOptions({{
 Highcharts.stockChart('ec',{{
   chart:{{
     backgroundColor:'transparent',spacing:[15,15,8,8],
-    panning:{{enabled:true,type:'x'}},zoomType:'',
+    panning:{{enabled:true,type:'x'}},
+    zooming:{{type:'x',mouseWheel:{{enabled:true}}}},
     marginRight:15,marginTop:45
   }},
   title:{{
@@ -305,7 +306,7 @@ def plot_kline_with_signals(data, trades_df):
 </script>
 <style>
 *{{margin:0;padding:0}}
-html,body{{width:100%;height:100%;background:transparent;overflow:hidden}}
+html,body{{width:100%;height:100%;background:transparent}}
 #hc{{width:100%;height:100%}}
 </style></head>
 <body><div id="hc"></div>
@@ -322,18 +323,16 @@ Highcharts.setOptions({{
   lang:{{
     months:['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'],
     shortMonths:['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
-    weekdays:['星期日','星期一','星期二','星期三','星期四','星期五','星期六'],
-    rangeSelectorZoom:'',
-    rangeSelectorFrom:'从',
-    rangeSelectorTo:'到'
+    weekdays:['星期日','星期一','星期二','星期三','星期四','星期五','星期六']
   }}
 }});
 
-Highcharts.stockChart('hc',{{
+var chart=Highcharts.stockChart('hc',{{
   chart:{{
     backgroundColor:'transparent',spacing:[5,5,10,5],
-    panning:{{enabled:true,type:'x'}},  // 鼠标拖动=平移查看前后K线（雪球风格）
-    zoomType:'',                         // 禁用拖拽缩放，改用滚轮缩放
+    zooming:{{mouseWheel:{{enabled:true}}}},              // 仅滚轮=缩放
+    panning:{{enabled:true,type:'x'}},                    // 拖动=平移时间窗口
+    resetZoomButton:{{theme:{{display:'none'}}}},
     marginRight:10
   }},
   title:{{text:'K线图与买卖点',align:'left',x:0,
