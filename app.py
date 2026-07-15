@@ -601,91 +601,191 @@ def plot_equity(equity_series):
 
 
 def plot_kline_with_signals(data, trades_df):
-    """绘制K线图、买卖点和成交量副图"""
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.05,
-                        row_heights=[0.7, 0.3],
-                        subplot_titles=('', ''))
+    """使用 Highcharts Stock 绘制 K 线图 — 雪球同款引擎（navigator + 十字光标 + 懒加载风格）"""
+    import json
 
-    # 主图 K线
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data['open'],
-        high=data['high'],
-        low=data['low'],
-        close=data['close'],
-        name='K线',
-        increasing_line_color='#e74c3c',
-        increasing_fillcolor='#e74c3c',
-        decreasing_line_color='#2ecc71',
-        decreasing_fillcolor='#2ecc71'
-    ), row=1, col=1)
+    # ---- 检测 Streamlit 主题 ----
+    try:
+        theme = st.config.get_option('theme.base')
+    except Exception:
+        theme = 'light'
+    is_dark = (theme == 'dark')
 
-    # 买卖点
+    RED = '#cf2a2a'
+    GREEN = '#009975'
+    if is_dark:
+        BG = '#0d1117'
+        TEXT = '#c9d1d9'
+        GRID = '#1a2535'
+        CROSSHAIR = '#30363d'
+        NAV_COLOR = '#444'
+        NAV_FILL = 'rgba(255,255,255,0.05)'
+    else:
+        BG = '#ffffff'
+        TEXT = '#333333'
+        GRID = '#e8e8e8'
+        CROSSHAIR = '#d0d0d0'
+        NAV_COLOR = '#999'
+        NAV_FILL = 'rgba(0,0,0,0.03)'
+
+    # ---- 转换 K 线 + 成交量数据 ----
+    ohlc = []
+    volumes = []
+    for idx, row in data.iterrows():
+        ts = int(idx.timestamp() * 1000)
+        o = round(float(row['open']), 2)
+        h = round(float(row['high']), 2)
+        l = round(float(row['low']), 2)
+        c = round(float(row['close']), 2)
+        v = int(row['volume'])
+        is_up = c >= o
+        ohlc.append([ts, o, h, l, c])
+        volumes.append({'x': ts, 'y': v, 'color': RED if is_up else GREEN,
+                        'up': is_up})
+
+    # ---- 买卖标记（flags 系列） ----
+    buys = []
+    sells = []
     if trades_df is not None and not trades_df.empty:
-        buys = trades_df[trades_df['action'] == 'BUY']
-        if not buys.empty:
-            fig.add_trace(go.Scatter(
-                x=buys['date'], y=buys['price'],
-                mode='markers', name='买入',
-                marker=dict(symbol='triangle-up', size=8,
-                            color='white',
-                            line=dict(color='#e74c3c', width=1.5)),
-                hovertemplate='<b>买入</b><br>日期: %{x|%Y-%m-%d}<br>价格: %{y:.2f}<extra></extra>'
-            ), row=1, col=1)
-        sells = trades_df[trades_df['action'] == 'SELL']
-        if not sells.empty:
-            fig.add_trace(go.Scatter(
-                x=sells['date'], y=sells['price'],
-                mode='markers', name='卖出',
-                marker=dict(symbol='triangle-down', size=8,
-                            color='white',
-                            line=dict(color='#2ecc71', width=1.5)),
-                hovertemplate='<b>卖出</b><br>日期: %{x|%Y-%m-%d}<br>价格: %{y:.2f}<extra></extra>'
-            ), row=1, col=1)
+        for _, row in trades_df.iterrows():
+            ts = int(row['date'].timestamp() * 1000)
+            if row['action'] == 'BUY':
+                reason = row.get('entry_reason', '')
+                buys.append({
+                    'x': ts,
+                    'title': '多',
+                    'text': f"买入 {row['price']:.2f}" + (f" ({reason})" if reason else "")
+                })
+            else:
+                profit = row.get('profit_pct', None)
+                reason = row.get('reason', '')
+                txt = f"卖出 {row['price']:.2f}"
+                if profit is not None:
+                    txt += f" | {profit:+.2f}%"
+                if reason:
+                    txt += f" | {reason}"
+                sells.append({'x': ts, 'title': '空', 'text': txt})
 
-    # 成交量
-    colors = ['#e74c3c' if close >= open else '#2ecc71'
-              for close, open in zip(data['close'], data['open'])]
-    fig.add_trace(go.Bar(
-        x=data.index,
-        y=data['volume'],
-        name='成交量',
-        marker=dict(color=colors),
-        hovertemplate='<b>成交量</b><br>日期: %{x|%Y-%m-%d}<br>成交: %{y:,.0f}<extra></extra>'
-    ), row=2, col=1)
+    # ---- 构建 Highcharts Stock HTML ----
+    html = f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.bootcdn.net/ajax/libs/highcharts/11.4.0/highstock.js">
+</script>
+<style>
+*{{margin:0;padding:0}}
+html,body{{width:100%;height:100%;background:transparent;overflow:hidden}}
+#hc{{width:100%;height:100%}}
+</style></head>
+<body><div id="hc"></div>
+<script>
+(function(){{
+var ohlc={json.dumps(ohlc)};
+var volumes={json.dumps(volumes)};
+var buys={json.dumps(buys)};
+var sells={json.dumps(sells)};
+var RED="{RED}",GREEN="{GREEN}",TEXT="{TEXT}",GRID="{GRID}",
+    CROSS="{CROSSHAIR}",BG="{BG}",NAVC="{NAV_COLOR}",NAVF="{NAV_FILL}";
 
-    # 布局
-    fig.update_layout(
-        title=dict(text='K线图与买卖点', x=0.5, xanchor='center', y=0.98, yanchor='top'),
-        height=600,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                    bgcolor='rgba(255,255,255,0.8)'),
-        margin=dict(l=40, r=40, t=60, b=40),
-        hovermode='x unified'
-    )
-    # X轴设置（底部子图）
-    fig.update_xaxes(
-        row=2, col=1,
-        rangeslider_visible=False,
-        rangeselector=dict(
-            buttons=[
-                dict(count=1, label="1个月", step="month", stepmode="backward"),
-                dict(count=3, label="3个月", step="month", stepmode="backward"),
-                dict(count=6, label="6个月", step="month", stepmode="backward"),
-                dict(count=1, label="1年", step="year", stepmode="backward"),
-                dict(step="all", label="全部")
-            ],
-            bgcolor='#e9ecef', activecolor='#007bff', font_color='black', borderwidth=1
-        ),
-        title_text="日期"
-    )
-    fig.update_xaxes(row=1, col=1, showticklabels=False)
-    # Y轴
-    fig.update_yaxes(title_text="价格", row=1, col=1)
-    fig.update_yaxes(title_text="", showticklabels=False, showgrid=False, zeroline=False, row=2, col=1)
-    return fig
+Highcharts.stockChart('hc',{{
+  chart:{{
+    backgroundColor:'transparent',spacing:[5,5,10,5],
+    panning:true,zoomType:'x',marginRight:10
+  }},
+  title:{{text:'K线图与买卖点',align:'left',x:0,
+    style:{{color:'#ffffff',fontSize:'16px',fontWeight:'bold'}}}},
+
+  // ======= 范围选择器（切时间） =======
+  rangeSelector:{{
+    buttons:[
+      {{type:'month',count:1,text:'1月'}},
+      {{type:'month',count:3,text:'3月'}},
+      {{type:'month',count:6,text:'半年'}},
+      {{type:'year', count:1,text:'1年'}},
+      {{type:'all',text:'全部'}}
+    ],
+    selected:4,inputEnabled:false,
+    buttonTheme:{{style:{{color:TEXT}}}}
+  }},
+
+  // ======= Navigator 迷你全景图 + 拖拽滑块（雪球标志） =======
+  navigator:{{
+    enabled:true,height:42,maskFill:'rgba(128,128,128,0.2)',
+    series:{{type:'area',color:NAVC,fillColor:NAVF,lineWidth:1}},
+    xAxis:{{labels:{{style:{{color:TEXT}}}},gridLineColor:GRID}},
+    handles:{{backgroundColor:'#666',borderColor:'#999'}}
+  }},
+  scrollbar:{{enabled:false}},
+
+  // ======= 十字光标 =======
+  tooltip:{{split:true,shared:true,
+    backgroundColor:BG,borderColor:CROSS,
+    style:{{color:TEXT,fontSize:'12px'}}
+  }},
+  crosshair:{{color:CROSS,dashStyle:'dot'}},
+
+  // ======= 禁止悬停变暗 =======
+  plotOptions:{{
+    series:{{states:{{inactive:{{opacity:1}}}}}},
+    candlestick:{{states:{{hover:{{brightness:0}}}}}},
+    column:{{states:{{hover:{{brightness:0}}}}}}
+  }},
+
+  // ======= 图例在下方 =======
+  legend:{{
+    align:'left',verticalAlign:'bottom',y:-5,
+    itemStyle:{{color:TEXT}},itemHoverStyle:{{color:TEXT}},
+    backgroundColor:'transparent'
+  }},
+
+  // ======= Y 轴：价格左侧 / 成交量右侧 =======
+  yAxis:[{{
+    labels:{{enabled:true,align:'left',x:0,
+      style:{{color:'#ffffff',fontSize:'14px'}}}},
+    gridLineColor:GRID,gridLineWidth:0.5,
+    opposite:false,lineColor:GRID,tickColor:TEXT,
+    tickLength:5,tickWidth:1,tickAmount:8,
+    showFirstLabel:true,showLastLabel:true,
+    resize:{{enabled:true}}
+  }},{{
+    labels:{{enabled:false}},gridLineWidth:0,
+    opposite:true,top:'73%',height:'27%',
+    lineWidth:0,tickWidth:0
+  }}],
+
+  // ======= X 轴 =======
+  xAxis:{{
+    labels:{{style:{{color:'#ffffff',fontSize:'14px'}}}},
+    gridLineColor:GRID,lineColor:GRID,tickColor:GRID
+  }},
+
+  // ======= 数据系列 =======
+  series:[{{
+    id:'kline',type:'candlestick',name:'K线',data:ohlc,
+    upColor:RED,color:GREEN,upLineColor:RED,lineColor:GREEN,
+    tooltip:{{valueDecimals:2}},
+    dataGrouping:{{enabled:true,forced:true,units:[
+      ['day',[1]],['week',[1]],['month',[1]],['year',[1]]
+    ]}}
+  }},{{
+    type:'column',name:'成交量',data:volumes,yAxis:1,
+    turboThreshold:0,dataGrouping:{{enabled:true,forced:true}},
+    tooltip:{{pointFormat:'成交量: <b>{{point.y:,.0f}}</b> 手'}}
+  }},{{
+    type:'flags',name:'买入',data:buys,onSeries:'kline',
+    color:RED,fillColor:'rgba(0,0,0,0)',shape:'squarepin',
+    style:{{color:RED,fontSize:'10px',fontWeight:'bold'}},
+    tooltip:{{pointFormat:'{{point.text}}'}}
+  }},{{
+    type:'flags',name:'卖出',data:sells,onSeries:'kline',
+    color:GREEN,fillColor:'rgba(0,0,0,0)',shape:'squarepin',
+    style:{{color:GREEN,fontSize:'10px',fontWeight:'bold'}},
+    tooltip:{{pointFormat:'{{point.text}}'}}
+  }}]
+}});
+}})();
+</script></body></html>'''
+
+    st.components.v1.html(html, height=600, scrolling=False)
 
 
 def plot_drawdown(equity_series):
@@ -985,7 +1085,7 @@ if run_btn:
 
     # ---- 图表 ----
     st.plotly_chart(plot_equity(equity), use_container_width=True)
-    st.plotly_chart(plot_kline_with_signals(df_signal, trades), use_container_width=True)
+    plot_kline_with_signals(df_signal, trades)
     st.plotly_chart(plot_drawdown(equity), use_container_width=True)
 
     # ---- 交易明细与详细指标 ----
