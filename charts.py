@@ -306,12 +306,16 @@ def plot_kline_with_signals(data, trades_df):
 </script>
 <style>
 *{{margin:0;padding:0}}
-html,body{{width:100%;height:100%;background:transparent}}
+html,body{{width:100%;height:100%;background:transparent;overflow:hidden;overscroll-behavior:none}}
 #hc{{width:100%;height:100%}}
 </style></head>
 <body><div id="hc"></div>
 <script>
+// 阻止滚轮事件穿透到父页面
 (function(){{
+var hcEl=document.getElementById('hc');
+hcEl.addEventListener('wheel',function(e){{e.stopPropagation();}},{{passive:false}});
+document.addEventListener('wheel',function(e){{e.preventDefault();}},{{passive:false}});
 var ohlc={json.dumps(ohlc)};
 var volumes={json.dumps(volumes)};
 var buyFlags={json.dumps(buy_flags)};
@@ -329,7 +333,7 @@ Highcharts.setOptions({{
 
 var chart=Highcharts.stockChart('hc',{{
   chart:{{
-    backgroundColor:'transparent',spacing:[5,5,10,5],
+    backgroundColor:'transparent',spacing:[5,5,2,5],
     zooming:{{mouseWheel:{{enabled:true}}}},              // 仅滚轮=缩放
     panning:{{enabled:true,type:'x'}},                    // 拖动=平移时间窗口
     resetZoomButton:{{theme:{{display:'none'}}}},
@@ -356,7 +360,7 @@ var chart=Highcharts.stockChart('hc',{{
 
   // ======= Navigator 迷你全景图（雪球同款）=======
   navigator:{{
-    enabled:true,height:42,maskFill:'rgba(128,128,128,0.2)',
+    enabled:true,height:30,maskFill:'rgba(128,128,128,0.2)',
     series:{{type:'area',color:NAVC,fillColor:NAVF,lineWidth:1}},
     xAxis:{{labels:{{style:{{color:TEXT}}}},gridLineColor:GRID}},
     handles:{{backgroundColor:'#666',borderColor:'#999'}}
@@ -443,4 +447,4 @@ var chart=Highcharts.stockChart('hc',{{
 </script></body></html>'''
 
     # 嵌入 Streamlit 页面
-    st.components.v1.html(html, height=600, scrolling=False)
+    st.components.v1.html(html, height=590, scrolling=False)

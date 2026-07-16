@@ -26,10 +26,12 @@ def call_deepseek(messages, model="deepseek-v4-pro", temperature=0.1, max_tokens
     Returns:
         str: 生成的文本内容，或以 "[ERROR] ..." 开头的错误信息
     """
-    # 从 session_state 获取用户输入的 API Key
+    # 从 session_state 获取用户输入的 API Key（兼容新旧两种存储位置）
     api_key = st.session_state.get("deepseek_api_key", "")
+    if not api_key and "rs" in st.session_state:
+        api_key = st.session_state.rs.get("deepseek_api_key", "")
     if not api_key:
-        return "[ERROR] 请先在侧边栏设置 DeepSeek API Key"
+        return "[ERROR] 请先在「🤖 策略工坊」页面设置 DeepSeek API Key"
 
     # 构建 API 请求
     url = "https://api.deepseek.com/chat/completions"
@@ -74,7 +76,7 @@ def extract_code(text):
     """
     从 DeepSeek 返回的文本中提取纯 Python 策略代码
     自动去除 Markdown 代码块标记（```python ... ```），
-    并定位 generate_signal 函数定义
+    并定位 generate_signal 函数定义 —— 同时保留前面的 # @PARAMS: 注释
 
     Args:
         text: DeepSeek 返回的原始文本
@@ -88,27 +90,38 @@ def extract_code(text):
 
     if matches:
         code = matches[0].strip()
-        # 如果提取的代码中包含目标函数，直接返回
         if "def generate_signal" in code:
             return code
-        # 否则从原文中按 def 关键字截取
         if "def generate_signal" in text:
-            start = text.find("def generate_signal")
-            code = text[start:].strip()
-            if code.endswith("```"):
-                code = code[:-3].strip()
-            return code
+            return _extract_with_params(text)
 
-    # 策略2: 无代码块标记，直接按 def generate_signal 定位
+    # 策略2: 无代码块标记，保留 @PARAMS 注释后截取
     if "def generate_signal" in text:
-        start = text.find("def generate_signal")
-        code = text[start:].strip()
-        if code.endswith("```"):
-            code = code[:-3].strip()
-        return code
+        return _extract_with_params(text)
 
     # 兜底：返回原始文本
     return text.strip()
+
+
+def _extract_with_params(text):
+    """从文本中截取 generate_signal 函数，同时保留前面的 # @PARAMS: 注释"""
+    func_pos = text.find("def generate_signal")
+
+    # 检查 def 前面是否有 # @PARAMS: 注释行
+    before = text[:func_pos]
+    params_match = re.search(r'#\s*@PARAMS:.*(?:\n|$)', before)
+    if params_match:
+        start = params_match.start()
+        # 确保是行首注释（不是行内注释）
+        line_start = before.rfind('\n', 0, start) + 1
+        start = line_start
+    else:
+        start = func_pos
+
+    code = text[start:].strip()
+    if code.endswith("```"):
+        code = code[:-3].strip()
+    return code
 
 
 def validate_strategy_code(code):
