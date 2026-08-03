@@ -1,0 +1,13 @@
+-r requirements.txt
+
+# Worker复用现有量化核心所需的最小计算依赖。
+pandas==2.2.1
+numpy==1.26.4
+baostock==0.9.2
+akshare>=1.18,<2.0
+
+# 将交易明细、净值和后续模型文件写入S3兼容对象存储。
+minio>=7.2,<8.0
+scikit-learn>=1.5,<2.0
+pyarrow>=16,<25
+joblib>=1.4,<2.0

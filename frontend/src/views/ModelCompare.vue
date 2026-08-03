@@ -1,0 +1,12 @@
+<script setup lang="ts">
+import {computed,onMounted,ref} from 'vue'
+import {api} from '../api'
+import {GitCompareArrows,RefreshCw} from 'lucide-vue-next'
+const rows=ref<any[]>([]),selected=ref<string[]>([]),q=ref(''),stage=ref('')
+const filtered=computed(()=>rows.value.filter(item=>(!q.value||item.name.toLowerCase().includes(q.value.toLowerCase()))&&(!stage.value||item.stage===stage.value)))
+const comparison=computed(()=>rows.value.filter(item=>selected.value.includes(item.id)))
+const metricKeys=['roc_auc','balanced_accuracy','rank_ic','cost_adjusted_return','annualized_sharpe','turnover']
+function metric(model:any,key:string){const value=model.metrics?.[key];return value===undefined||value===null?'—':Number(value).toFixed(4)}
+async function load(){rows.value=(await api.get('/models')).data}onMounted(load)
+</script>
+<template><section><div class="page-intro"><div><h2>模型横向比较</h2><p>算法、生命周期、样本外经济指标与特征解释并排检查</p></div><button class="secondary" @click="load"><RefreshCw :size="16"/>刷新</button></div><article class="panel"><div class="toolbar"><label><input v-model="q" placeholder="筛选模型名称"/></label><select v-model="stage"><option value="">全部阶段</option><option value="candidate">candidate</option><option value="validated">validated</option><option value="production">production</option><option value="archived">archived</option></select><span>已选择 {{selected.length}} 个</span></div><div class="data-table"><div class="data-row header"><span>选择 / 模型</span><span>算法</span><span>阶段</span><span>ROC AUC</span></div><div v-for="row in filtered" :key="row.id" class="data-row"><span><input v-model="selected" type="checkbox" :value="row.id"/> {{row.name}} v{{row.version}}</span><span>{{row.algorithm}}</span><span><i class="status" :class="row.stage">{{row.stage}}</i></span><span>{{metric(row,'roc_auc')}}</span></div></div></article><article v-if="comparison.length" class="panel"><div class="panel-head"><div><h3><GitCompareArrows :size="18"/> 指标矩阵</h3><p>所有值来自样本外预测</p></div></div><div class="compare-matrix"><div class="compare-row"><b>指标</b><strong v-for="model in comparison" :key="model.id">{{model.name}}</strong></div><div v-for="key in metricKeys" :key="key" class="compare-row"><b>{{key}}</b><span v-for="model in comparison" :key="model.id">{{metric(model,key)}}</span></div><div class="compare-row"><b>Top 特征</b><span v-for="model in comparison" :key="model.id">{{model.metrics?.feature_importance?.slice(0,3).map((item:any)=>item.feature).join('、')||'—'}}</span></div></div></article></section></template>

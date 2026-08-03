@@ -106,7 +106,9 @@ def _calc_confidence(df_signal: pd.DataFrame, lookback: int = 5) -> str:
 # 信号日志
 # ============================================================
 
-SIGNAL_LOG_PATH = "signal_log.json"
+DATA_DIR = os.getenv("DATA_DIR", ".")
+SIGNAL_LOG_PATH = os.path.join(DATA_DIR, "signal_log.json")
+PAPER_TRADE_LOG_PATH = os.path.join(DATA_DIR, "paper_trade.json")
 
 
 def log_signal(symbol: str, signal_type: str, price: float,
@@ -200,7 +202,7 @@ def paper_trade(symbol: str,
                 price: float,
                 balance: float = 100000,
                 position: int = 0,
-                paper_log_path: str = "paper_trade.json") -> Dict:
+                paper_log_path: Optional[str] = None) -> Dict:
     """
     模拟交易：记录虚拟买卖，跟踪持仓和资金
 
@@ -216,6 +218,7 @@ def paper_trade(symbol: str,
         dict: 更新后的 balance, position, 交易确认
     """
     # 读取当前状态
+    paper_log_path = paper_log_path or PAPER_TRADE_LOG_PATH
     state = {'balance': balance, 'position': position, 'trades': []}
     if os.path.exists(paper_log_path):
         try:

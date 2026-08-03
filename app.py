@@ -50,6 +50,7 @@ from overfit_check import (
     train_test_split_test, cscv_analysis, compute_pbo, white_noise_test
 )
 from live_signal import scan_signals, log_signal, get_signal_history, paper_trade
+from quant_core.strategy_runtime import resolve_strategy
 
 warnings.filterwarnings('ignore')
 load_dotenv()
@@ -65,7 +66,7 @@ def init_state():
     if "custom_strategy_code" not in st.session_state:
         st.session_state.custom_strategy_code = ""
     if "deepseek_api_key" not in st.session_state:
-        st.session_state.deepseek_api_key = ""
+        st.session_state.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
     if "deepseek_messages" not in st.session_state:
         st.session_state.deepseek_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if "generated_code" not in st.session_state:
@@ -111,39 +112,28 @@ def get_strategy():
     code = st.session_state.get("custom_strategy_code", "")
 
     if "右侧趋势" in name:
-        return generate_right_signal, {
+        params = {
             'ma_short': st.session_state.get("sp_ma_s", 5),
             'ma_mid': st.session_state.get("sp_ma_m", 20),
             'ma_long': st.session_state.get("sp_ma_l", 60),
             'vol_ratio': st.session_state.get("sp_vr", 1.5),
-        }, name
-    if "V型反转" in name or "v_shape" in name.lower():
-        return generate_v_shape_signal, {
+        }
+    elif "V型反转" in name or "v_shape" in name.lower():
+        params = {
             'lookback': st.session_state.get("sp_v_lb", 10),
             'drop_threshold': st.session_state.get("sp_v_dt", 0.15),
             'rebound_threshold': st.session_state.get("sp_v_rb", 0.01),
             'vol_ratio': st.session_state.get("sp_v_vr", 1.3),
-        }, name
+        }
+    else:
+        params = {}
 
-    if code:
-        try:
-            local_ns = {}
-            exec(code, {}, local_ns)
-            if 'generate_signal' in local_ns:
-                raw_func = local_ns['generate_signal']
-                import inspect as _inspect
-                sig = _inspect.signature(raw_func)
-                if 'kwargs' not in str(sig) and len(sig.parameters) <= 1:
-                    def _wrapped(df, **kwargs):
-                        return raw_func(df)
-                    return _wrapped, {}, name
-                return raw_func, {}, name
-        except Exception:
-            pass
-
-    return generate_right_signal, {
-        'ma_short': 5, 'ma_mid': 20, 'ma_long': 60, 'vol_ratio': 1.5
-    }, name
+    try:
+        # 当前页面是本地个人工具，所以显式允许受信任代码。公开网站不得沿用
+        # 这个开关，必须将用户策略放入资源受限的独立容器运行。
+        return resolve_strategy(name, params, code, trusted_code=True)
+    except (SyntaxError, ValueError, PermissionError):
+        return resolve_strategy("内置-右侧趋势")
 
 
 # ============================================================
@@ -684,7 +674,10 @@ def workshop_tab():
                         api_msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [
                             m for m in st.session_state.deepseek_messages if m["role"] != "system"
                         ]
-                        resp = call_deepseek(api_msgs)
+                        resp = call_deepseek(
+                            api_msgs,
+                            api_key=st.session_state.get("deepseek_api_key", ""),
+                        )
                         if resp.startswith("[ERROR]"):
                             st.error(resp)
                         else:
@@ -821,7 +814,7 @@ def live_tab():
 
     with sub3:
         import json
-        paper_path = "paper_trade.json"
+        paper_path = os.path.join(os.getenv("DATA_DIR", "."), "paper_trade.json")
         state = {'balance': 100000, 'position': 0, 'trades': []}
         if os.path.exists(paper_path):
             try:

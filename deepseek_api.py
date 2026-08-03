@@ -1,9 +1,8 @@
 """
 模块：DeepSeek API 客户端 (deepseek_api.py)
 功能：封装 DeepSeek API 的调用、响应解析、代码提取与验证逻辑
-依赖：streamlit (session_state), requests, re, config.SYSTEM_PROMPT
+依赖：requests, re
 """
-import streamlit as st
 import requests
 import re
 
@@ -12,13 +11,14 @@ import re
 # 核心 API 调用函数
 # ============================================================
 
-def call_deepseek(messages, model="deepseek-v4-pro", temperature=0.1, max_tokens=8000):
+def call_deepseek(messages, api_key, model="deepseek-v4-pro", temperature=0.1, max_tokens=8000):
     """
     调用 DeepSeek Chat API 生成策略代码
     使用 requests 库直接发送 HTTP 请求，避免 openai 库的编码兼容问题
 
     Args:
         messages:    对话消息列表，格式为 [{"role": "...", "content": "..."}, ...]
+        api_key:     由界面或服务层显式传入的 DeepSeek API Key
         model:       模型名称，默认 deepseek-v4-pro（最强推理模型）
         temperature: 生成温度 (0~2)，越低输出越确定/代码越严谨，默认 0.1（代码生成推荐）
         max_tokens:  最大输出 token 数，默认 8000（确保复杂策略代码不被截断）
@@ -26,12 +26,10 @@ def call_deepseek(messages, model="deepseek-v4-pro", temperature=0.1, max_tokens
     Returns:
         str: 生成的文本内容，或以 "[ERROR] ..." 开头的错误信息
     """
-    # 从 session_state 获取用户输入的 API Key（兼容新旧两种存储位置）
-    api_key = st.session_state.get("deepseek_api_key", "")
-    if not api_key and "rs" in st.session_state:
-        api_key = st.session_state.rs.get("deepseek_api_key", "")
+    # API Key 由调用方显式传入。核心客户端不再读取 Streamlit 会话，因而可以
+    # 被 FastAPI、后台 Worker 或命令行程序复用，也更容易在测试中注入假密钥。
     if not api_key:
-        return "[ERROR] 请先在「🤖 策略工坊」页面设置 DeepSeek API Key"
+        return "[ERROR] 未提供 DeepSeek API Key"
 
     # 构建 API 请求
     url = "https://api.deepseek.com/chat/completions"

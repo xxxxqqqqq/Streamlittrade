@@ -1,0 +1,144 @@
+name: quant-platform
+
+# 这是未来 Vue + FastAPI 平台的本地基础设施，不替换当前 Streamlit compose.yaml。
+# 生产环境应使用阿里云RDS、Redis和OSS，并通过密钥管理服务注入密码。
+services:
+  e2e:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.e2e
+    environment:
+      E2E_BASE_URL: http://frontend
+    depends_on:
+      frontend:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      QUANT_APP_ENV: development
+      QUANT_DATABASE_URL: postgresql+psycopg://quant:${POSTGRES_PASSWORD:-quant_dev_password}@postgres:5432/quant
+      QUANT_REDIS_URL: redis://redis:6379/0
+      QUANT_OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      QUANT_OBJECT_STORAGE_ACCESS_KEY: "${MINIO_ROOT_USER:-quant_local}"
+      QUANT_OBJECT_STORAGE_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
+      QUANT_OBJECT_STORAGE_BUCKET: quant-artifacts
+      QUANT_CORS_ORIGINS: '["http://localhost:5173"]'
+      QUANT_JWT_SECRET: "${QUANT_JWT_SECRET:-local-only-change-this-jwt-secret}"
+      QUANT_BOOTSTRAP_ADMIN_EMAIL: "${QUANT_BOOTSTRAP_ADMIN_EMAIL:-admin@quant.local}"
+      QUANT_BOOTSTRAP_ADMIN_PASSWORD: "${QUANT_BOOTSTRAP_ADMIN_PASSWORD:-quant-dev-admin}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+    restart: unless-stopped
+    init: true
+    environment:
+      QUANT_APP_ENV: development
+      QUANT_DATABASE_URL: postgresql+psycopg://quant:${POSTGRES_PASSWORD:-quant_dev_password}@postgres:5432/quant
+      QUANT_REDIS_URL: redis://redis:6379/0
+      QUANT_OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      QUANT_OBJECT_STORAGE_ACCESS_KEY: "${MINIO_ROOT_USER:-quant_local}"
+      QUANT_OBJECT_STORAGE_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
+      QUANT_OBJECT_STORAGE_BUCKET: quant-artifacts
+    depends_on:
+      api:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quant
+      POSTGRES_USER: quant
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-quant_dev_password}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant -d quant"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # 固定到 Docker Hub 实际发布的社区版标签，避免 latest 漂移。
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-quant_local}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    # 服务镜像已内置 mc，复用同一镜像可减少一次下载和供应链依赖。
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-quant_local}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
+    entrypoint: ["/bin/sh", "-c"]
+    # 等待对象存储可访问，并以幂等方式创建模型与报告使用的默认桶。
+    command:
+      - >-
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+        do sleep 2; done;
+        mc mb --ignore-existing local/quant-artifacts
+    restart: "no"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

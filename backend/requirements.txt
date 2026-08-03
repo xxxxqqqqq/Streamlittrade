@@ -1,0 +1,22 @@
+# Web API 与配置
+fastapi>=0.128,<1.0
+uvicorn[standard]>=0.40,<1.0
+pydantic-settings>=2.8,<3.0
+
+# PostgreSQL 异步访问。固定在 SQLAlchemy 2.0 稳定分支，暂不采用 2.1 beta。
+SQLAlchemy[asyncio]>=2.0,<2.1
+psycopg[binary]>=3.2,<4.0
+
+# Redis 同时提供同步和 asyncio 客户端。
+redis>=7.0,<8.0
+
+# 数据库迁移与Redis任务队列。
+alembic>=1.16,<2.0
+rq>=2.6,<3.0
+
+# API 通过受控接口读取 MinIO/OSS 研究产物，不向浏览器暴露存储凭据。
+minio>=7.2,<8.0
+
+# 身份认证：Argon2 密码哈希与短期 JWT 访问令牌。
+pwdlib[argon2]>=0.3,<1.0
+PyJWT>=2.10,<3.0
