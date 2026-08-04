@@ -2,12 +2,14 @@
 
 import unittest
 from datetime import date
+from types import SimpleNamespace
 
 import pandas as pd
 from pydantic import ValidationError
 
 from backend.app.schemas.data_catalog import FeatureCreate, SyncCreate
 from backend.app.services.factors import compute_factor, evaluate_expression, factor_library_payload
+from backend.app.workers.data_catalog import _compute_feature_column
 
 
 class DataCatalogContractTests(unittest.TestCase):
@@ -78,6 +80,29 @@ class DataCatalogContractTests(unittest.TestCase):
         )
         result = compute_factor(frame, "price_position", {"window": 3})
         self.assertAlmostEqual(result.iloc[-1], (13 - 9) / (14 - 9))
+
+    def test_materialized_factor_is_one_column_for_multiple_symbols(self):
+        """A multi-symbol return factor must remain assignable to one column."""
+
+        frame = pd.DataFrame(
+            {
+                "symbol": ["000001", "000001", "000002", "000002"],
+                "date": pd.to_datetime(["2024-01-01", "2024-01-02"] * 2),
+                "open": [10, 11, 20, 22],
+                "high": [11, 12, 21, 23],
+                "low": [9, 10, 19, 21],
+                "close": [10, 11, 20, 22],
+                "volume": [100, 110, 200, 220],
+            }
+        )
+        definition = SimpleNamespace(slug="return_20d", implementation="return", parameters={"window": 1})
+
+        column = _compute_feature_column(frame, definition)
+
+        self.assertIsInstance(column, pd.Series)
+        frame[definition.slug] = column
+        self.assertAlmostEqual(frame.loc[1, definition.slug], 0.1)
+        self.assertAlmostEqual(frame.loc[3, definition.slug], 0.1)
 
 
 if __name__ == "__main__":

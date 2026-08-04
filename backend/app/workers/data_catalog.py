@@ -64,6 +64,25 @@ def sync_data(job_id:str):
 def _compute(group,definition):
     return compute_factor(group,definition.implementation,definition.parameters)
 
+
+def _compute_feature_column(frame, definition):
+    """Return one factor column while preserving the original row order.
+
+    ``DataFrameGroupBy.apply`` changes its shape when every group returns a
+    similarly indexed Series: recent pandas versions may combine those Series
+    into a DataFrame (one column per group).  A factor is always a single
+    value per market row, so concatenate the per-symbol Series explicitly and
+    align it back to the input index instead.
+    """
+
+    values = [_compute(group, definition) for _, group in frame.groupby("symbol", sort=False)]
+    if not values:
+        return pd.Series(index=frame.index, dtype=float)
+    column = pd.concat(values)
+    if not isinstance(column, pd.Series):
+        raise ValueError(f"Factor {definition.slug} did not produce a single column")
+    return column.reindex(frame.index)
+
 def materialize_features(job_id:str):
     jid=UUID(job_id)
     with SyncSessionFactory() as s:
@@ -73,7 +92,7 @@ def materialize_features(job_id:str):
     try:
         frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri))).sort_values(["symbol","date"])
         for definition in definitions:
-            frame[definition.slug]=frame.groupby("symbol",group_keys=False).apply(lambda g:_compute(g,definition),include_groups=False).reset_index(level=0,drop=True)
+            frame[definition.slug] = _compute_feature_column(frame, definition)
         feature_columns=[d.slug for d in definitions]
         profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date())}
         for col in feature_columns:
