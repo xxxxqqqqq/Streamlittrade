@@ -1,33 +1,31 @@
-/* CSS-drawn connector: avoids charset-sensitive glyphs in the production bundle. */
+/* CSS and an ASCII-only inline SVG avoid charset-sensitive connector glyphs. */
 .flow-card:not(:last-child)::after{
   content:'';
   position:absolute;
-  right:-15px;
-  top:94px;
-  z-index:2;
-  width:30px;
-  height:30px;
-  border:1px solid #dce6f1;
-  border-radius:50%;
-  background:#fff;
-  box-shadow:0 3px 8px #18395712;
+  right:-22px;
+  top:108px;
+  z-index:1;
+  width:32px;
+  height:2px;
+  background:linear-gradient(90deg,#d6e4f3 0%,#b9d4ee 55%,#d6e4f3 100%);
 }
 
 .flow-card:not(:last-child)::before{
   content:'';
   position:absolute;
-  right:-5px;
-  top:104px;
-  z-index:3;
-  width:7px;
-  height:7px;
-  border-top:2px solid #6091c6;
-  border-right:2px solid #6091c6;
-  transform:rotate(45deg);
+  right:-17px;
+  top:91px;
+  z-index:2;
+  width:34px;
+  height:34px;
+  border:1px solid #d7e5f3;
+  border-radius:50%;
+  background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3.5 10h11M10.5 5.5 15 10l-4.5 4.5' fill='none' stroke='%232879df' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8'/%3E%3C/svg%3E") center/18px 18px no-repeat;
+  box-shadow:0 4px 12px #1d5d9a18,0 0 0 4px #f6faff;
+  transition:background-color .18s ease,border-color .18s ease,box-shadow .18s ease,transform .18s ease;
 }
 
-.flow-card:hover:not(:last-child)::after{border-color:#9dc4ee;box-shadow:0 5px 12px #1768d71c}
-.flow-card:hover:not(:last-child)::before{border-color:#1768d7}
+.flow-card:hover:not(:last-child)::before{border-color:#9fc8f2;background-color:#f2f8ff;box-shadow:0 7px 16px #1768d726,0 0 0 4px #f6faff;transform:translateX(2px)}
 
 @media(max-width:1320px){.flow-card:nth-child(3)::after,.flow-card:nth-child(3)::before{display:none}}
 @media(max-width:1000px){.flow-card:nth-child(2n)::after,.flow-card:nth-child(2n)::before{display:none}}
