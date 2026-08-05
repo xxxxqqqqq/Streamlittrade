@@ -84,7 +84,10 @@ onUnmounted(()=>window.clearInterval(notificationTimer))
   <div v-else class="shell">
     <aside>
       <div class="brand"><div class="brand-mark">Q</div><div><strong>QuantForge</strong><small>RESEARCH PLATFORM</small></div></div>
-      <div class="field" style="margin:12px"><label>当前项目</label><select v-model="selectedProjectId" @change="changeProject"><option v-for="project in projects" :key="project.id" :value="project.id">{{project.name}}</option></select></div>
+      <div class="workspace-switcher">
+        <label for="project-switch" class="workspace-label"><FolderKanban :size="14"/>当前项目</label>
+        <div class="workspace-control"><select id="project-switch" v-model="selectedProjectId" @change="changeProject"><option v-for="project in projects" :key="project.id" :value="project.id">{{project.name}}</option></select></div>
+      </div>
       <nav>
         <p class="nav-section-label">核心流程</p>
         <RouterLink v-for="[to,label,icon] in coreNav" :key="to" :to="to"><component :is="icon" :size="18"/><span>{{label}}</span></RouterLink>
