@@ -7,7 +7,7 @@ import {clearProject,selectProject,selectedProjectId} from './projects'
 import ToastCenter from './components/ToastCenter.vue'
 import {
   Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,
-  ChevronDown,FolderKanban,LayoutDashboard,Layers3,LogOut,Plus,Search,ScrollText,
+  Check,ChevronDown,FolderKanban,LayoutDashboard,Layers3,LogOut,Plus,Search,ScrollText,
   Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,
 } from 'lucide-vue-next'
 
@@ -16,7 +16,7 @@ const title=computed(()=>String(route.meta.title||'量化平台'))
 const publicPage=computed(()=>Boolean(route.meta.public))
 const projects=ref<any[]>([]),notifications=ref<any[]>([])
 const searchOpen=ref(false),notificationOpen=ref(false),searchQuery=ref(''),searchResults=ref<any[]>([]),searching=ref(false)
-const analysisOpen=ref(false),productionOpen=ref(false),governanceOpen=ref(false)
+const analysisOpen=ref(false),productionOpen=ref(false),governanceOpen=ref(false),projectMenuOpen=ref(false)
 let notificationTimer:number|undefined
 
 watch([publicPage,authenticated],async([isPublic,isAuthenticated])=>{
@@ -36,7 +36,9 @@ async function loadNotifications(){
   notifications.value=(await api.get('/notifications',{params:{limit:10}})).data
 }
 const unreadCount=computed(()=>notifications.value.filter(item=>item.status==='open').length)
-function changeProject(){selectProject(selectedProjectId.value);window.location.reload()}
+const activeProject=computed(()=>projects.value.find(project=>project.id===selectedProjectId.value))
+function changeProject(id:string){selectProject(id);projectMenuOpen.value=false;window.location.reload()}
+function closeProjectMenu(){projectMenuOpen.value=false}
 async function logout(){try{if(refreshToken.value)await api.post('/auth/logout',{refresh_token:refreshToken.value})}finally{clearSession();clearProject();router.replace('/login')}}
 async function search(){
   if(searchQuery.value.trim().length<2){searchResults.value=[];return}
@@ -75,8 +77,8 @@ watch(analysisRouteActive,active=>{if(active)analysisOpen.value=true},{immediate
 watch(productionRouteActive,active=>{if(active)productionOpen.value=true},{immediate:true})
 watch(governanceRouteActive,active=>{if(active)governanceOpen.value=true},{immediate:true})
 
-onMounted(()=>notificationTimer=window.setInterval(loadNotifications,30000))
-onUnmounted(()=>window.clearInterval(notificationTimer))
+onMounted(()=>{notificationTimer=window.setInterval(loadNotifications,30000);document.addEventListener('click',closeProjectMenu)})
+onUnmounted(()=>{window.clearInterval(notificationTimer);document.removeEventListener('click',closeProjectMenu)})
 </script>
 
 <template>
@@ -86,7 +88,10 @@ onUnmounted(()=>window.clearInterval(notificationTimer))
       <div class="brand"><div class="brand-mark">Q</div><div><strong>QuantForge</strong><small>RESEARCH PLATFORM</small></div></div>
       <div class="workspace-switcher">
         <label for="project-switch" class="workspace-label"><FolderKanban :size="14"/>当前项目</label>
-        <div class="workspace-control"><select id="project-switch" v-model="selectedProjectId" @change="changeProject"><option v-for="project in projects" :key="project.id" :value="project.id">{{project.name}}</option></select></div>
+        <div class="workspace-control" @click.stop>
+          <button id="project-switch" class="workspace-trigger" type="button" :aria-expanded="projectMenuOpen" aria-haspopup="listbox" @click="projectMenuOpen=!projectMenuOpen"><span><i></i>{{activeProject?.name||'选择项目'}}</span><ChevronDown :size="16" :class="{open:projectMenuOpen}"/></button>
+          <div v-if="projectMenuOpen" class="workspace-menu" role="listbox" aria-labelledby="project-switch"><button v-for="project in projects" :key="project.id" type="button" :class="{active:project.id===selectedProjectId}" :aria-selected="project.id===selectedProjectId" @click="changeProject(project.id)"><span><b>{{project.name}}</b><small>{{project.member_role||'member'}} 项目空间</small></span><Check v-if="project.id===selectedProjectId" :size="15"/></button></div>
+        </div>
       </div>
       <nav>
         <p class="nav-section-label">核心流程</p>
