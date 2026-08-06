@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import {computed,onMounted,ref,watch} from 'vue'
-import {useRouter} from 'vue-router'
+import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
 import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide-vue-next'
 
-const router=useRouter()
+const route=useRoute(),router=useRouter()
 const submitting=ref(false),error=ref(''),job=ref<any>(null),backtestId=ref('')
 const versions=ref<any[]>([]),strategies=ref<any[]>([]),models=ref<any[]>([])
 const form=ref({
   signal_source:'strategy',model_id:'',run_type:'portfolio',data_source:'data_version',data_version_id:'',strategy_id:'',
   symbol:'',symbols:'',strategy_name:'right_trend',start_date:'2020-01-01',end_date:'2024-12-31',
   initial_cash:1000000,max_positions:5,max_volume_participation:0.05,
+  lot_size:100,commission:0.0003,minimum_commission:5,stamp_duty:0.0005,slippage:0.001,
   top_n:5,minimum_probability:0.55,rebalance_frequency:5,
   ma_short:5,ma_mid:20,ma_long:60,vol_ratio:1.5,
   lookback:10,drop_threshold:0.08,rebound_threshold:0.03,confirm_days:2,
@@ -45,7 +46,11 @@ onMounted(async()=>{
     if(versions.value.length){form.value.data_version_id=versions.value[0].id;applyDataVersion()}
     else{form.value.data_source='demo';form.value.symbol='DEMO';form.value.symbols='DEMO1,DEMO2,DEMO3,DEMO4,DEMO5'}
     if(strategies.value.length)form.value.strategy_id=strategies.value[0].id
-    if(models.value.length)form.value.model_id=models.value[0].id
+    if(models.value.length){
+      const requested=String(route.query.model_id||'')
+      form.value.model_id=models.value.some((item:any)=>item.id===requested)?requested:models.value[0].id
+      if(requested&&form.value.model_id===requested)form.value.signal_source='model_oos'
+    }
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
 })
 watch(()=>form.value.data_version_id,applyDataVersion)
@@ -117,6 +122,11 @@ async function submit(){
           </template>
           <div v-if="!modelMode" class="field"><label>最大持仓数</label><input v-model.number="form.max_positions" type="number" min="1" max="100" :disabled="form.run_type==='single'"/></div>
           <div class="field"><label>最大成交量参与率</label><input v-model.number="form.max_volume_participation" type="number" min="0.001" max="1" step="0.01" :disabled="form.run_type==='single'"/></div>
+          <div class="field"><label>整手股数</label><input v-model.number="form.lot_size" type="number" min="100" step="100"/></div>
+          <div class="field"><label>买卖佣金率</label><input v-model.number="form.commission" type="number" min="0" max="0.05" step="0.0001"/></div>
+          <div class="field"><label>最低佣金</label><input v-model.number="form.minimum_commission" type="number" min="0" step="1"/></div>
+          <div class="field"><label>卖出印花税率</label><input v-model.number="form.stamp_duty" type="number" min="0" max="0.05" step="0.0001"/></div>
+          <div class="field"><label>单边滑点率</label><input v-model.number="form.slippage" type="number" min="0" max="0.1" step="0.0001"/></div>
           <div class="field"><label>初始资金</label><input v-model.number="form.initial_cash" type="number" min="1000"/></div>
           <div class="field"><label>开始日期</label><input v-model="form.start_date" type="date"/></div>
           <div class="field"><label>结束日期</label><input v-model="form.end_date" type="date"/></div>

@@ -15,8 +15,9 @@ test('core research workflow is prominent and secondary analysis is isolated',as
   await expect(sidebar.getByRole('link',{name:/^2\s+因子工程$/})).toBeVisible()
   await expect(sidebar.getByRole('link',{name:/^3\s+研究数据集$/})).toBeVisible()
   await expect(sidebar.getByRole('link',{name:/^4\s+模型研究$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^5\s+组合回测$/})).toBeVisible()
-  await expect(page.locator('.core-flow .flow-card')).toHaveCount(5)
+  await expect(sidebar.getByRole('link',{name:/^5\s+模型交易工作台$/})).toBeVisible()
+  await expect(sidebar.getByRole('link',{name:/^6\s+组合回测$/})).toBeVisible()
+  await expect(page.locator('.core-flow .flow-card')).toHaveCount(6)
   await expect(page.getByText('从研究数据到可交易组合，沿五个阶段推进')).toBeVisible()
 
   await expect(page.getByRole('link',{name:'模型比较',exact:true})).not.toBeVisible()

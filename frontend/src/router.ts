@@ -18,6 +18,7 @@ import DataVersionDetail from './views/DataVersionDetail.vue'
 import SnapshotDetail from './views/SnapshotDetail.vue'
 import Strategies from './views/Strategies.vue'
 import Predictions from './views/Predictions.vue'
+import TradeWorkbench from './views/TradeWorkbench.vue'
 import AdminUsers from './views/AdminUsers.vue'
 import Projects from './views/Projects.vue'
 import AuditLogs from './views/AuditLogs.vue'
@@ -43,6 +44,8 @@ export const router=createRouter({
     {path:'/experiments/new',component:ExperimentCreate,meta:{title:'创建训练实验'}},
     {path:'/models/compare',component:ModelCompare,meta:{title:'模型比较'}},
     {path:'/models/:id',component:ModelDetail,meta:{title:'模型结果'}},
+    {path:'/models/:id/trade-workbench',component:TradeWorkbench,meta:{title:'模型交易工作台'}},
+    {path:'/trade-workbench',component:TradeWorkbench,meta:{title:'模型交易工作台'}},
     {path:'/backtests/new',component:BacktestCreate,meta:{title:'创建回测'}},
     {path:'/backtests/:id',component:BacktestDetail,meta:{title:'回测报告'}},
     {path:'/backtests',component:Records,props:{kind:'backtests'},meta:{title:'回测中心'}},

@@ -6,7 +6,7 @@ import {authenticated,clearSession,refreshToken,user} from './auth'
 import {clearProject,selectProject,selectedProjectId} from './projects'
 import ToastCenter from './components/ToastCenter.vue'
 import {
-  Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,
+  Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,ChartCandlestick,
   Check,ChevronDown,FolderKanban,LayoutDashboard,Layers3,LogOut,Plus,Search,ScrollText,
   Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,
 } from 'lucide-vue-next'
@@ -54,7 +54,8 @@ function openNotifications(){notificationOpen.value=!notificationOpen.value;if(n
 const coreNav=[
   ['/','研究首页',LayoutDashboard],['/data-center','1  数据与标的',Layers3],
   ['/factor-research','2  因子工程',Filter],['/datasets','3  研究数据集',Database],
-  ['/experiments','4  模型研究',BrainCircuit],['/backtests','5  组合回测',FlaskConical],
+  ['/experiments','4  模型研究',BrainCircuit],['/trade-workbench','5  模型交易工作台',ChartCandlestick],
+  ['/backtests','6  组合回测',FlaskConical],
 ] as const
 const analysisNav=[
   ['/models','模型仓库',Boxes],['/models/compare','模型比较',ChartNoAxesCombined],

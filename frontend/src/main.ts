@@ -12,6 +12,8 @@ import './model-lifecycle.css'
 import './paper.css'
 import './monitoring.css'
 import './product.css'
+import './trade-workbench.css'
+import './core-flow-v2.css'
 
 const app=createApp(App)
 app.use(router)

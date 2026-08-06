@@ -10,6 +10,31 @@ import pandas as pd
 REQUIRED_PREDICTION_COLUMNS = {"date", "symbol", "probability"}
 
 
+def rank_model_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Return deterministic cross-sectional ranks for model predictions.
+
+    The stable symbol tie-breaker is shared by the execution engine and the
+    trade-workbench API so a rank displayed to a researcher can never drift
+    from the rank that produced the portfolio.
+    """
+    missing = REQUIRED_PREDICTION_COLUMNS.difference(predictions.columns)
+    if missing:
+        raise ValueError(f"Prediction artifact is missing columns: {sorted(missing)}")
+    scored = predictions[["date", "symbol", "prediction", "probability"]].copy() if "prediction" in predictions.columns else predictions[["date", "symbol", "probability"]].copy()
+    scored["date"] = pd.to_datetime(scored["date"]).dt.normalize()
+    scored["symbol"] = scored["symbol"].astype(str)
+    scored["probability"] = pd.to_numeric(scored["probability"], errors="coerce")
+    scored = scored.dropna(subset=["date", "symbol", "probability"])
+    if scored.duplicated(["date", "symbol"]).any():
+        raise ValueError("Prediction artifact contains duplicate date/symbol rows")
+    scored = scored.sort_values(
+        ["date", "probability", "symbol"], ascending=[True, False, True]
+    ).reset_index(drop=True)
+    scored["rank"] = scored.groupby("date", sort=False).cumcount() + 1
+    scored["universe_size"] = scored.groupby("date", sort=False)["symbol"].transform("size")
+    return scored
+
+
 def build_model_signal_frames(
     market_frames: Mapping[str, pd.DataFrame],
     predictions: pd.DataFrame,
@@ -27,9 +52,6 @@ def build_model_signal_frames(
     rebalance date has no OOS predictions, positions are cleared rather than
     silently carrying stale scores through a validation gap.
     """
-    missing = REQUIRED_PREDICTION_COLUMNS.difference(predictions.columns)
-    if missing:
-        raise ValueError(f"Prediction artifact is missing columns: {sorted(missing)}")
     if not 1 <= top_n <= 100:
         raise ValueError("top_n must be between 1 and 100")
     if not 0 <= minimum_probability <= 1:
@@ -42,13 +64,7 @@ def build_model_signal_frames(
         frame["signal"] = False
         frame["score"] = 0.0
 
-    scored = predictions[["date", "symbol", "probability"]].copy()
-    scored["date"] = pd.to_datetime(scored["date"]).dt.normalize()
-    scored["symbol"] = scored["symbol"].astype(str)
-    scored["probability"] = pd.to_numeric(scored["probability"], errors="coerce")
-    scored = scored.dropna(subset=["date", "symbol", "probability"])
-    if scored.duplicated(["date", "symbol"]).any():
-        raise ValueError("Prediction artifact contains duplicate date/symbol rows")
+    scored = rank_model_predictions(predictions)
     scored = scored.loc[scored["symbol"].isin(frames)]
     if scored.empty:
         raise ValueError("No predictions overlap the selected market-data universe")
@@ -69,7 +85,7 @@ def build_model_signal_frames(
             else:
                 selected = (
                     candidates.loc[candidates["probability"] >= minimum_probability]
-                    .sort_values(["probability", "symbol"], ascending=[False, True])
+                    .sort_values("rank")
                     .head(top_n)
                 )
                 current_targets = {
@@ -81,6 +97,10 @@ def build_model_signal_frames(
                         "date": pd.Timestamp(date).date().isoformat(),
                         "selected": list(current_targets),
                         "scores": {key: round(value, 8) for key, value in current_targets.items()},
+                        "ranks": {
+                            str(row.symbol): int(row.rank)
+                            for row in selected.itertuples(index=False)
+                        },
                     }
                 )
             last_rebalance_index = index

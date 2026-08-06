@@ -142,6 +142,11 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
         initial_cash=float(payload["initial_cash"]),
         max_positions=int(payload["top_n"]),
         max_volume_participation=float(payload["max_volume_participation"]),
+        lot_size=int(payload.get("lot_size", 100)),
+        commission=float(payload.get("commission", 0.0003)),
+        min_commission=float(payload.get("minimum_commission", 5.0)),
+        stamp_duty=float(payload.get("stamp_duty", 0.0005)),
+        slippage=float(payload.get("slippage", 0.001)),
         benchmark=_benchmark(signal_frames),
     )
     dataset_meta = reproducibility.get("dataset") or {}
@@ -192,7 +197,10 @@ def _portfolio_result(payload: dict[str, Any], project_id: UUID):
     # benchmark when no official benchmark feed has been selected.
     trades, equity, metrics, audit = run_portfolio_backtest(
         frames, initial_cash=float(payload["initial_cash"]), max_positions=int(payload["max_positions"]),
-        max_volume_participation=float(payload["max_volume_participation"]), benchmark=_benchmark(frames),
+        max_volume_participation=float(payload["max_volume_participation"]),
+        lot_size=int(payload.get("lot_size", 100)), commission=float(payload.get("commission", 0.0003)),
+        min_commission=float(payload.get("minimum_commission", 5.0)), stamp_duty=float(payload.get("stamp_duty", 0.0005)),
+        slippage=float(payload.get("slippage", 0.001)), benchmark=_benchmark(frames),
     )
     return trades, equity, metrics, audit
 
@@ -221,13 +229,21 @@ def execute_backtest(job_id: str) -> dict[str, Any]:
                 resolved_symbol = payload["symbol"]
                 market = _load_symbol(payload, resolved_symbol)
             _, quality = validate_market_dataset({resolved_symbol: market})
-            trades, equity, metrics = run_backtest(_signals(payload, market), initial_cash=float(payload["initial_cash"]))
+            trades, equity, metrics = run_backtest(
+                _signals(payload, market),
+                initial_cash=float(payload["initial_cash"]),
+                lot_size=int(payload.get("lot_size", 100)),
+                commission=float(payload.get("commission", 0.0003)),
+                min_commission=float(payload.get("minimum_commission", 5.0)),
+                stamp_duty=float(payload.get("stamp_duty", 0.0005)),
+                slippage=float(payload.get("slippage", 0.001)),
+            )
             audit = {"data_quality": quality.to_dict(), "constraint_model": {"signal_execution":"next_trading_day_open","settlement":"T+1","lot_size":100}}
         if trades is None or equity is None or "error" in metrics: raise RuntimeError(metrics.get("error", "Backtest returned no result"))
         _set_progress(parsed_id, 75)
         safe_metrics, safe_audit = _json_safe(metrics), _json_safe(audit)
         artifact = {
-            "schema_version": 2, "job_id": job_id, "backtest_id": str(run_id), "request": payload,
+            "schema_version": 3, "job_id": job_id, "backtest_id": str(run_id), "request": payload,
             "metrics": safe_metrics, "audit": safe_audit,
             "trades": json.loads(trades.to_json(orient="records", date_format="iso")),
             "equity": [{"date": pd.Timestamp(date).isoformat(), "value": float(value)} for date,value in equity.items()],

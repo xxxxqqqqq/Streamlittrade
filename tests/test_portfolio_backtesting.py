@@ -43,7 +43,19 @@ class PortfolioCredibilityTests(unittest.TestCase):
         self.assertTrue((pd.to_datetime(buys.date) == frames["A"].index[1]).all())
         self.assertLessEqual(sum(buys.price * buys.shares), 100_000)
         self.assertEqual(audit["constraint_model"]["settlement"], "T+1")
+        self.assertEqual(audit["constraint_model"]["slippage"], 0)
         self.assertAlmostEqual(equity.iloc[-1], 100_000)
+
+    def test_sell_event_keeps_signal_and_entry_lineage(self):
+        data = bars([10, 10, 11, 11], [True, False, False, False])
+        trades, _, _, _ = run_portfolio_backtest(
+            {"A": data}, commission=0, min_commission=0,
+            stamp_duty=0, slippage=0, max_volume_participation=1,
+        )
+        sell = trades[trades.action == "SELL"].iloc[0]
+        self.assertEqual(sell.signal_date, data.index[1])
+        self.assertEqual(sell.entry_date, data.index[1])
+        self.assertEqual(sell.reason, "removed_from_target_basket")
 
     def test_suspension_and_limit_up_reject_buys(self):
         a = bars([10, 10, 10], [True, False, False], is_suspended=[False, True, False])

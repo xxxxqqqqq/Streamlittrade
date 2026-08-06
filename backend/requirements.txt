@@ -17,6 +17,11 @@ rq>=2.6,<3.0
 # API 通过受控接口读取 MinIO/OSS 研究产物，不向浏览器暴露存储凭据。
 minio>=7.2,<8.0
 
+# Trade-workbench read APIs inspect immutable Parquet artifacts.  These are
+# read-only dependencies; model fitting remains isolated in the worker image.
+pandas==2.2.1
+pyarrow>=16,<25
+
 # 身份认证：Argon2 密码哈希与短期 JWT 访问令牌。
 pwdlib[argon2]>=0.3,<1.0
 PyJWT>=2.10,<3.0

@@ -2,7 +2,7 @@
 import {onMounted,ref} from 'vue'
 import {api,rootApi} from '../api'
 import {
-  Activity,ArrowRight,Boxes,BrainCircuit,ChartNoAxesCombined,Database,
+  Activity,ArrowRight,Boxes,BrainCircuit,ChartNoAxesCombined,ChartCandlestick,Database,
   Filter,FlaskConical,Layers3,ScrollText,
 } from 'lucide-vue-next'
 
@@ -32,7 +32,8 @@ const flow=[
   {step:'02',title:'因子工程',note:'定义因子、生成快照，检验有效性和稳定性',to:'/factor-research',action:'研究候选因子',icon:Filter,tone:'tone-cyan'},
   {step:'03',title:'研究数据集',note:'固化因子、标签、预测周期与完整数据血缘',to:'/datasets',action:'构建训练样本',icon:Database,tone:'tone-green'},
   {step:'04',title:'模型研究',note:'训练多种算法并完成时间隔离的样本外评估',to:'/experiments',action:'训练与筛选模型',icon:BrainCircuit,tone:'tone-purple'},
-  {step:'05',title:'组合回测',note:'把样本外预测转成持仓，检验成本、收益与回撤',to:'/backtests',action:'验证交易表现',icon:FlaskConical,tone:'tone-amber'},
+  {step:'05',title:'交易解释',note:'查看因子、样本外概率、排名，以及信号到真实成交的完整证据链',to:'/trade-workbench',action:'理解模型如何变成交易',icon:ChartCandlestick,tone:'tone-blue'},
+  {step:'06',title:'组合回测',note:'把样本外预测转成持仓，检验成本、收益与回撤',to:'/backtests',action:'验证交易表现',icon:FlaskConical,tone:'tone-amber'},
 ] as const
 
 const metrics=[
@@ -50,7 +51,7 @@ const analysisLinks=[
 <template>
   <section>
     <div class="hero research-hero">
-      <div><span class="eyebrow">CORE RESEARCH WORKFLOW</span><h2>从研究数据到可交易组合，沿五个阶段推进</h2><p>数据版本、因子快照、训练样本、样本外预测和回测报告逐级关联，全程可复现。</p></div>
+      <div><span class="eyebrow">CORE RESEARCH WORKFLOW</span><h2>从研究数据到可解释交易，沿六个阶段推进</h2><p>数据版本、因子快照、训练样本、样本外预测、交易解释和回测报告逐级关联，全程可复现。</p></div>
       <div class="system-pill" :class="{online}"><span></span>{{online?'研究服务正常':'正在连接服务'}}</div>
     </div>
 

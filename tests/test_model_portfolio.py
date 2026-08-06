@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from quant_core.model_portfolio import build_model_signal_frames
+from quant_core.model_portfolio import build_model_signal_frames, rank_model_predictions
 
 
 def market(symbol: str) -> pd.DataFrame:
@@ -20,6 +20,17 @@ def market(symbol: str) -> pd.DataFrame:
 
 
 class ModelPortfolioConstructionTests(unittest.TestCase):
+    def test_cross_sectional_rank_uses_stable_symbol_tie_breaker(self):
+        date = pd.Timestamp("2024-01-02")
+        ranked = rank_model_predictions(pd.DataFrame([
+            {"date": date, "symbol": "B", "probability": 0.8},
+            {"date": date, "symbol": "A", "probability": 0.8},
+            {"date": date, "symbol": "C", "probability": 0.7},
+        ]))
+        self.assertEqual(ranked.symbol.tolist(), ["A", "B", "C"])
+        self.assertEqual(ranked["rank"].tolist(), [1, 2, 3])
+        self.assertEqual(ranked["universe_size"].tolist(), [3, 3, 3])
+
     def test_top_n_signals_persist_until_next_rebalance(self):
         dates = pd.date_range("2024-01-02", periods=8, freq="B")
         predictions = pd.DataFrame(
@@ -41,6 +52,7 @@ class ModelPortfolioConstructionTests(unittest.TestCase):
         self.assertFalse(frames["B"]["signal"].any())
         self.assertEqual(audit["rebalance_count"], 2)
         self.assertTrue(audit["out_of_sample_only"])
+        self.assertEqual(audit["rebalances"][0]["ranks"], {"A": 1})
 
     def test_rejects_duplicate_prediction_rows(self):
         date = pd.Timestamp("2024-01-02")

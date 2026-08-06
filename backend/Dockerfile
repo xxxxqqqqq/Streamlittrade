@@ -15,6 +15,7 @@ RUN python -m pip install --index-url "$PIP_INDEX_URL" \
 
 # API 容器只复制后端代码，不携带 Streamlit 页面和本地密钥文件。
 COPY backend ./backend
+COPY quant_core ./quant_core
 
 RUN groupadd --system api \
     && useradd --system --gid api --create-home api \

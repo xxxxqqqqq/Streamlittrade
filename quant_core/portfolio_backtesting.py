@@ -17,6 +17,7 @@ class Position:
     shares: int
     acquired_date: pd.Timestamp
     cost: float
+    signal_date: pd.Timestamp | None = None
 
 
 def _fee(notional: float, rate: float, minimum: float) -> float:
@@ -69,7 +70,7 @@ def run_portfolio_backtest(
             elif float(row["open"]) <= float(row["limit_down"]): reason = "limit_down_locked"
             elif date <= position.acquired_date: reason = "t_plus_one"
             if reason:
-                events.append({"date": date, "symbol": symbol, "action": "REJECT_SELL", "reason": reason})
+                events.append({"date": date, "signal_date": prior_date, "symbol": symbol, "action": "REJECT_SELL", "reason": reason})
                 continue
             capacity = int(float(row["volume"]) * max_volume_participation // lot_size) * lot_size
             shares = min(position.shares, capacity)
@@ -81,7 +82,7 @@ def run_portfolio_backtest(
             cash += notional - fee - duty
             position.shares -= shares
             position.cost -= allocated_cost
-            events.append({"date": date, "symbol": symbol, "action": "SELL", "price": price, "shares": shares, "commission": fee, "stamp_duty": duty, "pnl": pnl, "profit_pct": pnl / allocated_cost * 100 if allocated_cost else 0.0})
+            events.append({"date": date, "signal_date": prior_date, "entry_date": position.acquired_date, "symbol": symbol, "action": "SELL", "price": price, "shares": shares, "commission": fee, "stamp_duty": duty, "pnl": pnl, "profit_pct": pnl / allocated_cost * 100 if allocated_cost else 0.0, "reason": "removed_from_target_basket"})
             if position.shares == 0: del positions[symbol]
 
         available_targets = [s for s in targets if s not in positions and date in canonical[s].index]
@@ -92,7 +93,7 @@ def run_portfolio_backtest(
             if row["is_suspended"]: reason = "suspended"
             elif float(row["open"]) >= float(row["limit_up"]): reason = "limit_up_locked"
             if reason:
-                events.append({"date": date, "symbol": symbol, "action": "REJECT_BUY", "reason": reason})
+                events.append({"date": date, "signal_date": prior_date, "symbol": symbol, "action": "REJECT_BUY", "reason": reason})
                 continue
             price = float(row["open"]) * (1 + slippage)
             capacity = int(float(row["volume"]) * max_volume_participation // lot_size) * lot_size
@@ -104,7 +105,7 @@ def run_portfolio_backtest(
                 shares -= lot_size; notional = shares * price; fee = _fee(notional, commission, min_commission)
             if shares <= 0: continue
             cash -= notional + fee
-            positions[symbol] = Position(shares=shares, acquired_date=date, cost=notional + fee)
+            positions[symbol] = Position(shares=shares, acquired_date=date, cost=notional + fee, signal_date=prior_date)
             events.append({"date": date, "symbol": symbol, "action": "BUY", "price": price, "shares": shares, "commission": fee, "signal_date": prior_date})
 
         market_value = 0.0
@@ -133,6 +134,8 @@ def run_portfolio_backtest(
     audit = {"data_quality": quality.to_dict(), "holdings": holdings_history, "constraint_model": {
         "signal_execution": "next_trading_day_open", "settlement": "T+1", "lot_size": lot_size,
         "limit_lock": True, "suspension": True, "volume_participation": max_volume_participation,
+        "commission": commission, "minimum_commission": min_commission,
+        "stamp_duty": stamp_duty, "slippage": slippage,
         "corporate_actions": ["cash_dividend", "split_ratio"],
     }}
     return trades, equity, metrics, audit

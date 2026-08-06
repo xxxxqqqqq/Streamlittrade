@@ -28,10 +28,17 @@ class BacktestCreate(BaseModel):
     initial_cash: Decimal = Field(default=Decimal("100000"), gt=0, le=Decimal("1000000000"))
     max_positions: int = Field(default=10, ge=1, le=100)
     max_volume_participation: float = Field(default=0.05, gt=0, le=1)
+    lot_size: int = Field(default=100, ge=100, le=10000)
+    commission: float = Field(default=0.0003, ge=0, le=0.05)
+    minimum_commission: float = Field(default=5.0, ge=0, le=1000)
+    stamp_duty: float = Field(default=0.0005, ge=0, le=0.05)
+    slippage: float = Field(default=0.001, ge=0, le=0.1)
 
     @model_validator(mode="after")
     def validate_business_rules(self):
         if self.start_date >= self.end_date: raise ValueError("start_date must be earlier than end_date")
+        if self.lot_size % 100:
+            raise ValueError("lot_size must be a multiple of 100")
         if (self.end_date - self.start_date).days > 365 * 20: raise ValueError("backtest range cannot exceed 20 years")
         if self.signal_source == "model_oos":
             if self.model_id is None:

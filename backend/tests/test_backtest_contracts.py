@@ -68,6 +68,16 @@ class BacktestRequestTests(unittest.TestCase):
                 strategy_parameters={"ma_short": 60, "ma_mid": 20, "ma_long": 5}
             )
 
+    def test_execution_costs_are_explicit_and_lot_size_is_validated(self):
+        request = BacktestCreate()
+        self.assertEqual(request.lot_size, 100)
+        self.assertEqual(request.commission, 0.0003)
+        self.assertEqual(request.minimum_commission, 5.0)
+        self.assertEqual(request.stamp_duty, 0.0005)
+        self.assertEqual(request.slippage, 0.001)
+        with self.assertRaises(ValidationError):
+            BacktestCreate(lot_size=150)
+
     def test_demo_data_is_reproducible(self):
         first = generate_demo_stock_data(date(2020, 1, 1), date(2021, 1, 1))
         second = generate_demo_stock_data(date(2020, 1, 1), date(2021, 1, 1))
