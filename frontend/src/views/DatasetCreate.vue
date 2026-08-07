@@ -13,6 +13,9 @@ const form=ref({
   start_date:'2018-01-01',
   end_date:'2024-12-31',
   horizon:5,
+  training_fraction:0.55,
+  tuning_fraction:0.25,
+  tuning_folds:3,
 })
 const snapshots=ref<any[]>([])
 const submitting=ref(false)
@@ -53,6 +56,9 @@ async function submit(){
       feature_snapshot_id:formalMode.value?form.value.feature_snapshot_id:null,
       symbols,
       horizon:Number(form.value.horizon),
+      training_fraction:Number(form.value.training_fraction),
+      tuning_fraction:Number(form.value.tuning_fraction),
+      tuning_folds:Number(form.value.tuning_folds),
     }
     const response=await api.post('/datasets',body)
     datasetId.value=response.data.resource_id
@@ -103,6 +109,10 @@ async function submit(){
             <label>预测周期（交易日）</label>
             <input v-model.number="form.horizon" type="number" min="1" max="60" required/>
           </div>
+          <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min="0.3" max="0.8" step="0.05" required/><small>只用于初始拟合。</small></div>
+          <div class="field"><label>调参区比例</label><input v-model.number="form.tuning_fraction" type="number" min="0.1" max="0.4" step="0.05" required/><small>Purged Walk-Forward 只在此区比较模型。</small></div>
+          <div class="field"><label>调参折数</label><input v-model.number="form.tuning_folds" type="number" min="2" max="6" required/></div>
+          <div class="field"><label>最终封存区</label><input :value="`${Math.round((1-form.training_fraction-form.tuning_fraction)*100)}%`" disabled/><small>模型与参数锁定后只允许开启一次。</small></div>
           <div v-if="formalMode" class="field full">
             <label>已就绪特征快照</label>
             <select v-model="form.feature_snapshot_id" required>

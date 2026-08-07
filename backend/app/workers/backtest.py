@@ -113,6 +113,7 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
         prediction_uri = model.prediction_artifact_uri
         model_name, model_version, algorithm = model.name, model.version, model.algorithm
         reproducibility = dict(model.reproducibility or {})
+        model_metrics = dict(model.metrics or {})
 
     predictions = pd.read_parquet(io.BytesIO(download_bytes(prediction_uri)))
     predictions["date"] = pd.to_datetime(predictions["date"]).dt.normalize()
@@ -165,7 +166,8 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
             source_meta.get("data_version_sha256")
             if isinstance(source_meta, dict) else None
         ),
-        "validation": "purged_walk_forward_oos",
+        "validation": model_metrics.get("split", "purged_walk_forward_oos"),
+        "evaluation_scope": model_metrics.get("evaluation_scope", "cv_oos"),
     }
     metrics.update(
         {

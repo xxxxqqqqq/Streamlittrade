@@ -2,10 +2,10 @@
 
 from backend.app.models.backtest import BacktestRun
 from backend.app.models.job import Job, OutboxEvent
-from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, Strategy
+from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation, Strategy
 from backend.app.models.identity import AuditLog, AuthSession, Project, ProjectMember, User
 from backend.app.models.paper import PaperAccount, PaperFill, PaperOrder, PaperPosition
 from backend.app.models.data_catalog import DataSource, DataVersion, FactorResearchRun, FeatureDefinition, FeatureSnapshot
 from backend.app.models.operations import AlertEvent, DriftRun, PredictionSchedule
 
-__all__ = ["AlertEvent", "AuditLog", "BacktestRun", "Dataset", "DriftRun", "Experiment", "Job", "OutboxEvent", "ModelVersion", "PredictionRun", "PredictionSchedule", "PaperAccount", "PaperFill", "PaperOrder", "PaperPosition", "Strategy", "User", "Project", "ProjectMember", "DataSource", "DataVersion", "FeatureDefinition", "FeatureSnapshot", "FactorResearchRun"]
+__all__ = ["AlertEvent", "AuditLog", "BacktestRun", "Dataset", "DriftRun", "Experiment", "Job", "OutboxEvent", "ModelVersion", "PredictionRun", "SealedEvaluation", "PredictionSchedule", "PaperAccount", "PaperFill", "PaperOrder", "PaperPosition", "Strategy", "User", "Project", "ProjectMember", "DataSource", "DataVersion", "FeatureDefinition", "FeatureSnapshot", "FactorResearchRun"]

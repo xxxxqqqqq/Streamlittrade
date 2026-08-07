@@ -39,6 +39,16 @@ class ResearchContractTests(unittest.TestCase):
             feature_snapshot_id=snapshot_id,
         )
         self.assertEqual(request.feature_snapshot_id,snapshot_id)
+        self.assertEqual(request.training_fraction, 0.55)
+        self.assertEqual(request.tuning_fraction, 0.25)
+        self.assertAlmostEqual(1-request.training_fraction-request.tuning_fraction, 0.20)
+
+    def test_dataset_keeps_a_final_sealed_region(self):
+        with self.assertRaises(ValidationError):
+            DatasetCreate(
+                name="leaky dataset", data_source="demo",
+                training_fraction=0.7, tuning_fraction=0.25,
+            )
 
     def test_experiment_has_safe_baseline_defaults(self):
         request = ExperimentCreate(name="baseline", dataset_id=uuid4())

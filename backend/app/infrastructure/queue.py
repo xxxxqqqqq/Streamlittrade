@@ -47,6 +47,7 @@ def enqueue_by_kind(job_id: UUID, kind: str) -> None:
         "backtest": "backend.app.workers.backtest.execute_backtest",
         "dataset": "backend.app.workers.research.build_dataset",
         "training": "backend.app.workers.research.train_experiment",
+        "sealed_evaluation": "backend.app.workers.research.evaluate_sealed_model",
         "data_sync": "backend.app.workers.data_catalog.sync_data",
         "feature_materialize": "backend.app.workers.data_catalog.materialize_features",
     }

@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from quant_core.ml import economic_metrics, purged_walk_forward_splits
+from quant_core.ml import economic_metrics, purged_walk_forward_splits, three_way_research_split
 
 
 class WalkForwardTests(unittest.TestCase):
@@ -29,6 +29,26 @@ class WalkForwardTests(unittest.TestCase):
         self.assertGreater(result["rank_ic"], 0)
         self.assertLess(result["cost_adjusted_return"], result["top_quantile_return"])
         self.assertIn("annualized_sharpe", result)
+
+    def test_three_way_split_keeps_sealed_dates_out_of_tuning(self):
+        dates = pd.Series(np.repeat(pd.date_range("2018-01-01", periods=500, freq="B"), 4))
+        split = three_way_research_split(
+            dates, training_fraction=0.55, tuning_fraction=0.25,
+            n_tuning_splits=3, purge_days=5, embargo_days=5,
+        )
+        sealed_dates = set(dates.iloc[split.sealed_index])
+        self.assertEqual(len(split.tuning_folds), 3)
+        self.assertTrue(sealed_dates)
+        for fold in split.tuning_folds:
+            self.assertFalse(sealed_dates & set(dates.iloc[fold.train_index]))
+            self.assertFalse(sealed_dates & set(dates.iloc[fold.test_index]))
+            self.assertLess(max(dates.iloc[fold.train_index]), min(dates.iloc[fold.test_index]))
+        self.assertLess(pd.Timestamp(split.tuning_end), pd.Timestamp(split.sealed_start))
+
+    def test_three_way_split_reserves_at_least_ten_percent(self):
+        dates = pd.Series(pd.date_range("2020-01-01", periods=300, freq="B"))
+        with self.assertRaises(ValueError):
+            three_way_research_split(dates, training_fraction=0.7, tuning_fraction=0.25)
 
 
 if __name__ == "__main__":

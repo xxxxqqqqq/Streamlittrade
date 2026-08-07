@@ -21,9 +21,9 @@ from backend.app.db.sync_session import SyncSessionFactory
 from backend.app.infrastructure.object_storage import download_bytes, upload_bytes
 from backend.app.models.job import Job
 from backend.app.models.data_catalog import DataVersion, FeatureSnapshot
-from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun
+from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation
 from quant_core import fetch_stock_data, generate_demo_stock_data
-from quant_core.ml import FEATURES, build_training_frame, economic_metrics, purged_walk_forward_splits
+from quant_core.ml import FEATURES, build_training_frame, economic_metrics, three_way_research_split
 
 
 class TaskCanceled(RuntimeError):
@@ -101,13 +101,21 @@ def build_dataset(job_id: str) -> dict:
             feature_columns = FEATURES
             source_metadata = {"mode": "legacy_fetch", "data_source": spec["data_source"]}
         _check_cancel(jid)
+        research_split = three_way_research_split(
+            result["date"],
+            training_fraction=float(spec.get("training_fraction", 0.55)),
+            tuning_fraction=float(spec.get("tuning_fraction", 0.25)),
+            n_tuning_splits=int(spec.get("tuning_folds", 3)),
+            purge_days=int(spec["horizon"]),
+            embargo_days=int(spec["horizon"]),
+        )
         buffer = io.BytesIO()
         result.to_parquet(buffer, index=False)
         payload = buffer.getvalue()
         content_hash = hashlib.sha256(payload).hexdigest()
         uri = upload_bytes(f"datasets/{dataset.id}/{content_hash[:12]}/features.parquet", payload, "application/vnd.apache.parquet")
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
             "content_sha256": content_hash,
             "features": feature_columns,
             "label": "future_return > 0",
@@ -117,6 +125,18 @@ def build_dataset(job_id: str) -> dict:
             "date_max": str(pd.to_datetime(result.date).max().date()),
             "created_at": datetime.now(UTC).isoformat(),
             "source": source_metadata,
+            "research_protocol": {
+                "kind": "train_tune_sealed_v1",
+                "training_fraction": float(spec.get("training_fraction", 0.55)),
+                "tuning_fraction": float(spec.get("tuning_fraction", 0.25)),
+                "sealed_fraction": round(1-float(spec.get("training_fraction", 0.55))-float(spec.get("tuning_fraction", 0.25)), 6),
+                "tuning_folds": int(spec.get("tuning_folds", 3)),
+                "purge_days": int(spec["horizon"]),
+                "embargo_days": int(spec["horizon"]),
+                "training": {"start": research_split.training_start, "end": research_split.training_end, "rows": int(len(research_split.training_index))},
+                "tuning": {"start": research_split.tuning_start, "end": research_split.tuning_end, "rows": int(sum(len(fold.test_index) for fold in research_split.tuning_folds))},
+                "sealed": {"start": research_split.sealed_start, "end": research_split.sealed_end, "rows": int(len(research_split.sealed_index)), "status": "locked"},
+            },
         }
         with SyncSessionFactory() as session:
             job, record = session.get(Job, jid), session.get(Dataset, dataset.id)
@@ -195,7 +215,16 @@ def train_experiment(job_id: str) -> dict:
     try:
         frame = pd.read_parquet(io.BytesIO(download_bytes(uri))).sort_values(["date", "symbol"]).reset_index(drop=True)
         _check_cancel(jid)
-        folds = list(purged_walk_forward_splits(frame.date, n_splits=4, purge_days=horizon, embargo_days=horizon))
+        protocol = dict(dataset_snapshot.get("research_protocol") or {})
+        split = three_way_research_split(
+            frame.date,
+            training_fraction=float(protocol.get("training_fraction", dataset.specification.get("training_fraction", 0.55))),
+            tuning_fraction=float(protocol.get("tuning_fraction", dataset.specification.get("tuning_fraction", 0.25))),
+            n_tuning_splits=int(protocol.get("tuning_folds", dataset.specification.get("tuning_folds", 3))),
+            purge_days=horizon,
+            embargo_days=horizon,
+        )
+        folds = list(split.tuning_folds)
         fold_metrics, prediction_frames = [], []
         for fold in folds:
             _check_cancel(jid)
@@ -222,7 +251,14 @@ def train_experiment(job_id: str) -> dict:
             "recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 6),
             "roc_auc": round(float(roc_auc_score(y_true, probability)), 6),
             "train_rows": int(fold_metrics[-1]["train_rows"]), "test_rows": len(predictions),
-            "split": "purged_walk_forward_4_fold", "purge_days": horizon, "embargo_days": horizon,
+            "split": "three_way_purged_walk_forward", "evaluation_scope": "tuning_oos",
+            "sealed_status": "locked", "purge_days": horizon, "embargo_days": horizon,
+            "research_split": protocol or {
+                "kind": "train_tune_sealed_v1",
+                "training": {"start": split.training_start, "end": split.training_end},
+                "tuning": {"start": split.tuning_start, "end": split.tuning_end},
+                "sealed": {"start": split.sealed_start, "end": split.sealed_end, "status": "locked"},
+            },
             "folds": fold_metrics,
             **economic_metrics(predictions, horizon=horizon),
         }
@@ -247,12 +283,16 @@ def train_experiment(job_id: str) -> dict:
             )
         ]
         final_model = _build_estimator(algorithm, params)
-        final_model.fit(frame[feature_columns], frame["label"])
+        development = frame.iloc[split.development_index]
+        final_model.fit(development[feature_columns], development["label"])
         reproducibility = {
             "schema_version": 1, "random_seed": 42, "dataset": dataset_snapshot,
             "algorithm": algorithm, "parameters": params, "features": feature_columns,
             "python_version": platform.python_version(), "sklearn_version": sklearn.__version__,
             "trained_at": datetime.now(UTC).isoformat(),
+            "fit_scope": "training_plus_tuning_only",
+            "fit_end": split.tuning_end,
+            "sealed_start": split.sealed_start,
         }
         output = io.BytesIO()
         joblib.dump({"model": final_model, "features": feature_columns, "metrics": metrics, "reproducibility": reproducibility}, output)
@@ -285,6 +325,82 @@ def train_experiment(job_id: str) -> dict:
         return {"model_id": str(model_id), "metrics": metrics}
     except Exception as exc:
         _fail(jid, experiment, str(exc))
+        raise
+
+
+def evaluate_sealed_model(job_id: str) -> dict:
+    """Open the final holdout exactly once for the dataset's selected model."""
+    jid = UUID(job_id)
+    with SyncSessionFactory() as session:
+        job = session.get(Job, jid)
+        evaluation = session.get(SealedEvaluation, UUID(job.payload["sealed_evaluation_id"])) if job else None
+        model = session.get(ModelVersion, evaluation.model_id) if evaluation else None
+        experiment = session.get(Experiment, model.experiment_id) if model else None
+        dataset = session.get(Dataset, evaluation.dataset_id) if evaluation else None
+        if not job or not evaluation or not model or not experiment or not dataset or dataset.status != "ready":
+            raise LookupError("Sealed evaluation resources do not exist")
+        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
+        job.attempt += 1; job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        evaluation.status = "running"
+        session.commit()
+        evaluation_id = evaluation.id
+    try:
+        frame = pd.read_parquet(io.BytesIO(download_bytes(dataset.artifact_uri))).sort_values(["date", "symbol"]).reset_index(drop=True)
+        bundle = joblib.load(io.BytesIO(download_bytes(model.artifact_uri)))
+        features = list(bundle["features"])
+        protocol = dict((dataset.metadata_snapshot or {}).get("research_protocol") or {})
+        horizon = int(dataset.specification.get("horizon", 5))
+        split = three_way_research_split(
+            frame.date,
+            training_fraction=float(protocol.get("training_fraction", dataset.specification.get("training_fraction", 0.55))),
+            tuning_fraction=float(protocol.get("tuning_fraction", dataset.specification.get("tuning_fraction", 0.25))),
+            n_tuning_splits=int(protocol.get("tuning_folds", dataset.specification.get("tuning_folds", 3))),
+            purge_days=horizon,
+            embargo_days=horizon,
+        )
+        sealed = frame.iloc[split.sealed_index].copy()
+        estimator = bundle["model"]
+        sealed["prediction"] = estimator.predict(sealed[features])
+        sealed["probability"] = estimator.predict_proba(sealed[features])[:, 1]
+        metrics = {
+            "evaluation_scope": "final_sealed_holdout",
+            "sealed_start": split.sealed_start,
+            "sealed_end": split.sealed_end,
+            "sealed_rows": int(len(sealed)),
+            "accuracy": round(float(accuracy_score(sealed.label, sealed.prediction)), 6),
+            "balanced_accuracy": round(float(balanced_accuracy_score(sealed.label, sealed.prediction)), 6),
+            "precision": round(float(precision_score(sealed.label, sealed.prediction, zero_division=0)), 6),
+            "recall": round(float(recall_score(sealed.label, sealed.prediction, zero_division=0)), 6),
+            "roc_auc": round(float(roc_auc_score(sealed.label, sealed.probability)), 6),
+            **economic_metrics(sealed, horizon=horizon),
+        }
+        output = io.BytesIO()
+        sealed[["date", "symbol", "future_return", "label", "prediction", "probability"]].to_parquet(output, index=False)
+        payload = output.getvalue()
+        content_hash = hashlib.sha256(payload).hexdigest()
+        uri = upload_bytes(
+            f"sealed-evaluations/{evaluation_id}/{content_hash[:12]}/predictions.parquet",
+            payload,
+            "application/vnd.apache.parquet",
+        )
+        with SyncSessionFactory() as session:
+            job = session.get(Job, jid)
+            record = session.get(SealedEvaluation, evaluation_id)
+            registered_model = session.get(ModelVersion, model.id)
+            record.status, record.metrics = "succeeded", metrics
+            record.artifact_uri, record.content_sha256 = uri, content_hash
+            registered_model.metrics = {
+                **dict(registered_model.metrics or {}),
+                "sealed_status": "opened",
+                "sealed_evaluation": {"id": str(record.id), **metrics, "content_sha256": content_hash},
+            }
+            job.status, job.progress = "succeeded", 100
+            job.result_summary = {"sealed_evaluation_id": str(record.id), "model_id": str(model.id), **metrics}
+            job.completed_at = datetime.now(UTC); job.lease_expires_at = None
+            session.commit()
+        return job.result_summary
+    except Exception as exc:
+        _fail(jid, evaluation, str(exc))
         raise
 
 

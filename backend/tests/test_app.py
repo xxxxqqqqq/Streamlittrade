@@ -56,6 +56,7 @@ class ApplicationContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/api/v1/jobs/{job_id}/retry", document["paths"])
         self.assertIn("/api/v1/models/{model_id}/stage", document["paths"])
         self.assertIn("/api/v1/models/{model_id}/rollback", document["paths"])
+        self.assertIn("/api/v1/models/{model_id}/sealed-evaluation", document["paths"])
         self.assertIn("/api/v1/models/production", document["paths"])
         self.assertIn(
             "/api/v1/models/production/{algorithm}/predictions",

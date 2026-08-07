@@ -10,11 +10,12 @@ from backend.app.db.session import get_db_session
 from backend.app.infrastructure.outbox import add_outbox
 from backend.app.models.job import Job
 from backend.app.models.data_catalog import FeatureSnapshot
-from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, Strategy
+from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation, Strategy
 from backend.app.schemas.research import (
     DatasetCreate, DatasetRead, ExperimentCreate, ExperimentRead, ModelRead,
     ModelRollbackRequest, ModelStageUpdate, PredictionCreate, PredictionRead,
-    ProductionPredictionCreate, StrategyCreate, StrategyRead, TaskSubmission,
+    ProductionPredictionCreate, SealedEvaluationCreate, SealedEvaluationRead,
+    StrategyCreate, StrategyRead, TaskSubmission,
 )
 from backend.app.core.security import get_current_user, require_admin
 from backend.app.models.identity import AuditLog, User
@@ -78,6 +79,68 @@ async def list_models(session:AsyncSession=Depends(get_db_session),context:Proje
     return list((await session.scalars(select(ModelVersion).join(Experiment,Experiment.id==ModelVersion.experiment_id).where(Experiment.project_id==context.project.id).order_by(ModelVersion.created_at.desc()))).all())
 
 
+@router.get("/models/{model_id}/sealed-evaluation", response_model=SealedEvaluationRead | None)
+async def read_sealed_evaluation(
+    model_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    context: ProjectContext = Depends(get_project_context),
+):
+    return await session.scalar(
+        select(SealedEvaluation)
+        .join(ModelVersion, ModelVersion.id == SealedEvaluation.model_id)
+        .join(Experiment, Experiment.id == ModelVersion.experiment_id)
+        .where(SealedEvaluation.model_id == model_id, Experiment.project_id == context.project.id)
+    )
+
+
+@router.post("/models/{model_id}/sealed-evaluation", response_model=TaskSubmission, status_code=202)
+async def create_sealed_evaluation(
+    model_id: UUID,
+    body: SealedEvaluationCreate,
+    session: AsyncSession = Depends(get_db_session),
+    admin: User = Depends(require_admin),
+    context: ProjectContext = Depends(get_project_context),
+):
+    row = (
+        await session.execute(
+            select(ModelVersion, Experiment, Dataset)
+            .join(Experiment, Experiment.id == ModelVersion.experiment_id)
+            .join(Dataset, Dataset.id == Experiment.dataset_id)
+            .where(ModelVersion.id == model_id, Experiment.project_id == context.project.id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(404, "模型不存在")
+    model, _experiment, dataset = row
+    if model.stage != "candidate":
+        raise HTTPException(409, "只有锁定参数的候选模型可以开启最终封存区")
+    protocol = dict((dataset.metadata_snapshot or {}).get("research_protocol") or {})
+    if protocol.get("kind") != "train_tune_sealed_v1" or model.metrics.get("sealed_status") != "locked":
+        raise HTTPException(409, "该模型不是三段式研究产生的封存候选模型")
+    existing = await session.scalar(select(SealedEvaluation).where(SealedEvaluation.dataset_id == dataset.id))
+    if existing is not None:
+        raise HTTPException(409, "该数据集的最终封存区已经开启，不能用于第二个模型")
+    jid, evaluation_id = uuid4(), uuid4()
+    job = Job(
+        id=jid, owner_id=context.user.id, project_id=context.project.id,
+        kind="sealed_evaluation", status="queued", progress=0,
+        payload={"sealed_evaluation_id": str(evaluation_id)},
+    )
+    evaluation = SealedEvaluation(
+        id=evaluation_id, project_id=context.project.id, dataset_id=dataset.id,
+        model_id=model.id, job_id=jid, status="queued", reason=body.reason,
+    )
+    session.add(job); await session.flush(); session.add(evaluation)
+    session.add(AuditLog(
+        actor_id=admin.id, action="model.sealed_evaluation_opened",
+        resource_type="model", resource_id=str(model.id),
+        details={"dataset_id": str(dataset.id), "reason": body.reason},
+    ))
+    add_outbox(session, job, "backend.app.workers.research.evaluate_sealed_model")
+    await session.commit()
+    return TaskSubmission(job_id=jid, resource_id=evaluation_id)
+
+
 @router.patch("/models/{model_id}/stage",response_model=ModelRead)
 async def update_model_stage(
     model_id:UUID,
@@ -98,6 +161,8 @@ async def update_model_stage(
         missing = required.difference(model.metrics)
         if missing or len(model.metrics.get("folds", [])) < 3:
             raise HTTPException(409, f"模型缺少可信验证证据: {sorted(missing)}")
+        if model.metrics.get("evaluation_scope") == "tuning_oos" and not model.metrics.get("sealed_evaluation"):
+            raise HTTPException(409, "三段式研究模型必须先完成唯一一次最终封存区评估")
     if body.stage=="production":
         # 发布只替换当前项目内同算法的生产版本，不能影响其他项目。
         others=(
@@ -160,6 +225,11 @@ async def _create_prediction(
     session:AsyncSession,
     context:ProjectContext,
 ) -> TaskSubmission:
+    if model.metrics.get("evaluation_scope") == "tuning_oos" and model.metrics.get("sealed_status") == "locked":
+        dataset_meta = (model.reproducibility or {}).get("dataset") or {}
+        source = dataset_meta.get("source") if isinstance(dataset_meta, dict) else {}
+        if str((source or {}).get("feature_snapshot_id")) == str(snapshot.id):
+            raise HTTPException(409, "最终封存区仍锁定，不能通过批量预测提前读取同一研究快照")
     job,prediction=await create_prediction_job(
         session,
         name=name,

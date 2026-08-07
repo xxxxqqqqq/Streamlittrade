@@ -83,6 +83,28 @@ class ModelVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SealedEvaluation(Base):
+    """One-time final holdout evaluation locked to one selected dataset model."""
+
+    __tablename__ = "sealed_evaluations"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", name="uq_sealed_evaluation_dataset"),
+        UniqueConstraint("model_id", name="uq_sealed_evaluation_model"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("datasets.id", ondelete="RESTRICT"), nullable=False, index=True)
+    model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("model_versions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    artifact_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class PredictionRun(Base):
     """A project-scoped batch prediction produced from an immutable feature snapshot."""
     __tablename__ = "prediction_runs"

@@ -14,9 +14,14 @@ class DatasetCreate(BaseModel):
     start_date: date = date(2018, 1, 1)
     end_date: date = date(2024, 12, 31)
     horizon: int = Field(default=5, ge=1, le=60)
+    training_fraction: float = Field(default=0.55, ge=0.3, le=0.8)
+    tuning_fraction: float = Field(default=0.25, ge=0.1, le=0.4)
+    tuning_folds: int = Field(default=3, ge=2, le=6)
     @model_validator(mode="after")
     def validate_dates(self):
         if self.start_date >= self.end_date: raise ValueError("开始日期必须早于结束日期")
+        if self.training_fraction + self.tuning_fraction > 0.9:
+            raise ValueError("at least 10% of dates must remain in the final sealed region")
         if self.data_source == "feature_snapshot":
             if self.feature_snapshot_id is None: raise ValueError("正式数据集必须选择特征快照")
         elif self.data_source == "demo": self.symbols = [f"DEMO{i+1}" for i in range(max(3, len(self.symbols)))]
@@ -65,6 +70,24 @@ class ExperimentRead(RecordRead):
 class ModelRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID; experiment_id: UUID; name: str; version: int; algorithm: str; artifact_uri: str; prediction_artifact_uri: str | None; metrics: dict[str, Any]; reproducibility: dict[str, Any]; stage: str; created_at: datetime
+
+
+class SealedEvaluationCreate(BaseModel):
+    reason: str = Field(min_length=10, max_length=500)
+
+
+class SealedEvaluationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    dataset_id: UUID
+    model_id: UUID
+    job_id: UUID
+    status: str
+    reason: str
+    metrics: dict[str, Any] | None
+    content_sha256: str | None
+    error_message: str | None
+    created_at: datetime
 
 
 class StrategyCreate(BaseModel):

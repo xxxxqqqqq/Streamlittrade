@@ -26,6 +26,93 @@ class TimeFold:
     test_end: str
 
 
+@dataclass(frozen=True)
+class ThreeWayResearchSplit:
+    """Immutable train/tuning/sealed partition on whole trading dates."""
+
+    training_index: np.ndarray
+    development_index: np.ndarray
+    tuning_folds: tuple[TimeFold, ...]
+    sealed_index: np.ndarray
+    training_start: str
+    training_end: str
+    tuning_start: str
+    tuning_end: str
+    sealed_start: str
+    sealed_end: str
+
+
+def three_way_research_split(
+    dates: pd.Series,
+    *,
+    training_fraction: float = 0.55,
+    tuning_fraction: float = 0.25,
+    n_tuning_splits: int = 3,
+    purge_days: int = 5,
+    embargo_days: int = 5,
+) -> ThreeWayResearchSplit:
+    """Create expanding tuning folds while keeping the final region sealed.
+
+    Fractions are applied to unique trading dates, never individual symbol
+    rows.  A purge/embargo gap separates training from tuning and development
+    from the sealed holdout so forward labels cannot cross a boundary.
+    """
+    if not 0.3 <= training_fraction <= 0.8:
+        raise ValueError("training_fraction must be between 0.3 and 0.8")
+    if not 0.1 <= tuning_fraction <= 0.4:
+        raise ValueError("tuning_fraction must be between 0.1 and 0.4")
+    if training_fraction + tuning_fraction > 0.9:
+        raise ValueError("at least 10% of dates must remain sealed")
+    if n_tuning_splits < 2:
+        raise ValueError("n_tuning_splits must be at least 2")
+
+    normalized = pd.to_datetime(dates).dt.normalize()
+    unique_dates = np.array(sorted(normalized.unique()))
+    gap = purge_days + embargo_days
+    training_end_pos = int(len(unique_dates) * training_fraction)
+    tuning_end_pos = int(len(unique_dates) * (training_fraction + tuning_fraction))
+    tuning_start_pos = training_end_pos + gap
+    sealed_start_pos = tuning_end_pos + gap
+    tuning_dates = unique_dates[tuning_start_pos:tuning_end_pos]
+    sealed_dates = unique_dates[sealed_start_pos:]
+    if len(unique_dates[:training_end_pos]) < 20 or len(tuning_dates) < n_tuning_splits or len(sealed_dates) < 20:
+        raise ValueError("Not enough unique dates for train/tuning/sealed research")
+
+    chunks = [chunk for chunk in np.array_split(tuning_dates, n_tuning_splits) if len(chunk)]
+    folds: list[TimeFold] = []
+    for fold_number, test_dates in enumerate(chunks, start=1):
+        test_start_pos = int(np.searchsorted(unique_dates, test_dates[0]))
+        train_dates = unique_dates[: max(0, test_start_pos - gap)]
+        if len(train_dates) < 20:
+            raise ValueError("Training region is too short after leakage gap")
+        folds.append(
+            TimeFold(
+                fold=fold_number,
+                train_index=np.flatnonzero(normalized.isin(train_dates).to_numpy()),
+                test_index=np.flatnonzero(normalized.isin(test_dates).to_numpy()),
+                train_start=str(pd.Timestamp(train_dates[0]).date()),
+                train_end=str(pd.Timestamp(train_dates[-1]).date()),
+                test_start=str(pd.Timestamp(test_dates[0]).date()),
+                test_end=str(pd.Timestamp(test_dates[-1]).date()),
+            )
+        )
+
+    training_dates = unique_dates[:training_end_pos]
+    development_dates = unique_dates[:tuning_end_pos]
+    return ThreeWayResearchSplit(
+        training_index=np.flatnonzero(normalized.isin(training_dates).to_numpy()),
+        development_index=np.flatnonzero(normalized.isin(development_dates).to_numpy()),
+        tuning_folds=tuple(folds),
+        sealed_index=np.flatnonzero(normalized.isin(sealed_dates).to_numpy()),
+        training_start=str(pd.Timestamp(training_dates[0]).date()),
+        training_end=str(pd.Timestamp(training_dates[-1]).date()),
+        tuning_start=str(pd.Timestamp(tuning_dates[0]).date()),
+        tuning_end=str(pd.Timestamp(tuning_dates[-1]).date()),
+        sealed_start=str(pd.Timestamp(sealed_dates[0]).date()),
+        sealed_end=str(pd.Timestamp(sealed_dates[-1]).date()),
+    )
+
+
 def purged_walk_forward_splits(
     dates: pd.Series,
     *,

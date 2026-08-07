@@ -5,7 +5,7 @@ import unittest
 from sqlalchemy import UniqueConstraint
 
 from backend.app.models.paper import PaperAccount
-from backend.app.models.research import PredictionRun, Strategy
+from backend.app.models.research import PredictionRun, SealedEvaluation, Strategy
 
 
 class IsolationContractTests(unittest.TestCase):
@@ -32,6 +32,18 @@ class IsolationContractTests(unittest.TestCase):
         table = PredictionRun.__table__
 
         for name in ("project_id", "job_id", "model_id", "feature_snapshot_id"):
+            self.assertFalse(table.c[name].nullable)
+
+    def test_sealed_holdout_can_only_be_opened_once_per_dataset(self):
+        table = SealedEvaluation.__table__
+        unique_columns = {
+            tuple(constraint.columns.keys())
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        self.assertIn(("dataset_id",), unique_columns)
+        self.assertIn(("model_id",), unique_columns)
+        for name in ("project_id", "dataset_id", "model_id", "job_id"):
             self.assertFalse(table.c[name].nullable)
 
 

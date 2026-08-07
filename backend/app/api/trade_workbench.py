@@ -106,11 +106,12 @@ async def workbench_context(
             "horizon_trading_days": metadata.get("horizon", chain.dataset.specification.get("horizon", 5)),
         },
         "evaluation": {
-            "scope": "cv_oos", "validation": "purged_walk_forward",
+            "scope": (chain.model.metrics or {}).get("evaluation_scope", "cv_oos"),
+            "validation": (chain.model.metrics or {}).get("split", "purged_walk_forward"),
             "oos_start": predictions["date"].min().date().isoformat(),
             "oos_end": predictions["date"].max().date().isoformat(),
             "folds": folds,
-            "warning": "当前为交叉验证样本外结果，不是从未参与选模的最终封存检验区。",
+            "warning": "当前为调参区样本外结果；最终封存区不会用于模型和组合参数选择。" if (chain.model.metrics or {}).get("evaluation_scope") == "tuning_oos" else "当前为交叉验证样本外结果，不是从未参与选模的最终封存检验区。",
         },
         "universe": sorted(predictions["symbol"].astype(str).unique().tolist()),
         "features": features,
@@ -194,7 +195,7 @@ async def symbol_timeline(
             "model_lineage": artifact.get("audit", {}).get("model_lineage", {}),
             "portfolio_construction": artifact.get("audit", {}).get("portfolio_construction", {}),
             "metrics": artifact.get("metrics", {}),
-            "evaluation_scope": "cv_oos",
+            "evaluation_scope": (chain.model.metrics or {}).get("evaluation_scope", "cv_oos"),
         },
         "bars": bars, "signals": signals, "factors": factors, "events": events,
     }
