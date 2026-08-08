@@ -194,6 +194,9 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
     missing_features = [column for column in feature_columns if column not in features.columns]
     if missing_features:
         raise ValueError(f"Approved factors are missing from snapshot: {', '.join(missing_features)}")
+    universe_applied = "universe_member" in features.columns
+    if universe_applied:
+        features = features[features["universe_member"].fillna(False)].copy()
     features = features[["date", "symbol", *feature_columns]].copy()
     horizon = int(spec["horizon"])
     market = market.sort_values(["symbol", "date"])
@@ -214,6 +217,7 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
         "data_version_id": str(snapshot.data_version_id),
         "data_version_sha256": version_hash,
         "lineage": lineage,
+        "dynamic_universe": {"applied": universe_applied, **dict(lineage.get("dynamic_universe") or {})},
         "factor_gate": gate,
         "dataset_id": str(dataset_id),
     }

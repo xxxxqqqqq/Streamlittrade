@@ -12,8 +12,16 @@ class SourceCreate(BaseModel):
     configuration: dict[str,Any]=Field(default_factory=dict)
 class SourceRead(SourceCreate):
     model_config=ConfigDict(from_attributes=True); id:UUID;status:str;created_at:datetime
+class DynamicUniversePolicy(BaseModel):
+    enabled:bool=True
+    min_history_days:int=Field(default=120,ge=20,le=1000)
+    min_price:float=Field(default=3.0,ge=0,le=100000)
+    liquidity_lookback:int=Field(default=20,ge=5,le=252)
+    min_avg_turnover:float=Field(default=1_000_000.0,ge=0)
+    max_members:int=Field(default=100,ge=3,le=1000)
 class SyncCreate(BaseModel):
     source_id:UUID;symbols:list[str]=Field(min_length=1,max_length=100);start_date:date;end_date:date
+    universe_policy:DynamicUniversePolicy=Field(default_factory=DynamicUniversePolicy)
     @model_validator(mode="after")
     def check(self):
         if self.start_date>=self.end_date:raise ValueError("start_date must be earlier than end_date")
@@ -25,7 +33,9 @@ class FeatureCreate(BaseModel):
     implementation:Literal[
         "return","log_return","moving_average_bias","volatility","downside_volatility",
         "volume_ratio","rsi","price_position","atr","amplitude","overnight_gap",
-        "illiquidity","skewness","momentum_acceleration","expression"
+        "illiquidity","skewness","momentum_acceleration","expression",
+        "short_term_reversal","relative_strength_12_1","trend_quality","drawdown",
+        "liquidity_trend","turnover_stability","volume_price_confirmation"
     ]
     parameters:dict[str,Any]=Field(default_factory=dict);description:str=""
     @model_validator(mode="after")

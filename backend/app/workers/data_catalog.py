@@ -12,6 +12,7 @@ from backend.app.models.data_catalog import DataSource,DataVersion,FactorResearc
 from backend.app.models.job import Job
 from backend.app.services.factors import compute_factor
 from backend.app.services.research_gates import factor_training_dates
+from backend.app.services.universe import apply_dynamic_universe
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
 
 def _progress(jid,value):
@@ -55,11 +56,13 @@ def sync_data(job_id:str):
         _progress(jid,45)
         canonical,report=validate_market_dataset(frames)
         standard_frame=pd.concat([f.reset_index() for f in canonical.values()],ignore_index=True).sort_values(["date","symbol"])
+        standard_frame,universe_report=apply_dynamic_universe(standard_frame,payload.get("universe_policy"))
         standard_bytes=_parquet(standard_frame);standard_hash=hashlib.sha256(standard_bytes).hexdigest();standard_uri=upload_bytes(f"data/standardized/{standard.id}/{standard_hash[:12]}.parquet",standard_bytes,"application/vnd.apache.parquet")
         with SyncSessionFactory() as s:
             job=s.get(Job,jid);r=s.get(DataVersion,raw.id);v=s.get(DataVersion,standard.id)
             r.status="ready";r.artifact_uri=raw_uri;r.content_sha256=raw_hash;r.row_count=len(raw_frame);r.quality_report={"raw_preserved":True};r.lineage={"provider":source.provider,"source_slug":source.slug,"ingested_at":datetime.now(UTC).isoformat()}
-            v.status="ready";v.artifact_uri=standard_uri;v.content_sha256=standard_hash;v.row_count=len(standard_frame);v.quality_report=report.to_dict();v.lineage={"parent_id":str(r.id),"parent_sha256":raw_hash,"transform":"canonical_market_v1"}
+            quality={**report.to_dict(),"dynamic_universe":universe_report}
+            v.status="ready";v.artifact_uri=standard_uri;v.content_sha256=standard_hash;v.row_count=len(standard_frame);v.quality_report=quality;v.lineage={"parent_id":str(r.id),"parent_sha256":raw_hash,"transform":"canonical_market_v2","dynamic_universe":universe_report}
             job.status="succeeded";job.progress=100;job.result_summary={"raw_version_id":str(r.id),"standard_version_id":str(v.id),"rows":len(standard_frame),"content_sha256":standard_hash};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(DataVersion,raw.id),(DataVersion,standard.id)]);raise
@@ -97,13 +100,14 @@ def materialize_features(job_id:str):
         for definition in definitions:
             frame[definition.slug] = _compute_feature_column(frame, definition)
         feature_columns=[d.slug for d in definitions]
-        profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date())}
+        universe_columns=[column for column in ("universe_member","universe_rank") if column in frame.columns]
+        profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date()),"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})}
         for col in feature_columns:
             values=frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":round(float(values.mean()),8) if values.notna().any() else None,"std":round(float(values.std()),8) if values.notna().any() else None,"min":round(float(values.min()),8) if values.notna().any() else None,"max":round(float(values.max()),8) if values.notna().any() else None}
-        payload=_parquet(frame[["date","symbol",*feature_columns]]);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
+        payload=_parquet(frame[["date","symbol",*universe_columns,*feature_columns]]);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
         definitions_snapshot=[{"id":str(d.id),"slug":d.slug,"version":d.version,"implementation":d.implementation,"parameters":d.parameters} for d in definitions]
         with SyncSessionFactory() as s:
-            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=len(frame);item.profile=profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":"feature_registry_v1"};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":len(frame),"features":feature_columns,"content_sha256":digest};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
+            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=len(frame);item.profile=profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":"feature_registry_v2","dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":len(frame),"features":feature_columns,"content_sha256":digest};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(FeatureSnapshot,snap.id)]);raise
 
@@ -161,6 +165,8 @@ def research_factors(job_id:str):
         job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15);run.status="running";s.commit()
     try:
         feature_frame=pd.read_parquet(io.BytesIO(download_bytes(snapshot.artifact_uri)))
+        if "universe_member" in feature_frame.columns:
+            feature_frame=feature_frame[feature_frame["universe_member"].fillna(False)].copy()
         market_frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri)))
         feature_slugs=[item["slug"] for item in snapshot.lineage.get("definitions",[])]
         missing=[slug for slug in feature_slugs if slug not in feature_frame.columns]

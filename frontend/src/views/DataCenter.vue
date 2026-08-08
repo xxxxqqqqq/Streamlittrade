@@ -28,6 +28,7 @@ type SyncDraft={
   symbols:string
   start_date:string
   end_date:string
+  universe_policy:{enabled:boolean;min_history_days:number;min_price:number;liquidity_lookback:number;min_avg_turnover:number;max_members:number}
 }
 
 const defaultSyncForm:SyncDraft={
@@ -35,6 +36,7 @@ const defaultSyncForm:SyncDraft={
   symbols:'DEMO1,DEMO2,DEMO3,DEMO4,DEMO5',
   start_date:'2018-01-01',
   end_date:'2024-12-31',
+  universe_policy:{enabled:true,min_history_days:120,min_price:3,liquidity_lookback:20,min_avg_turnover:1000000,max_members:100},
 }
 const syncDraftKey=`quant_data_sync_draft:${selectedProjectId.value||'default'}`
 const hadSavedSyncDraft=sessionStorage.getItem(syncDraftKey)!==null
@@ -125,7 +127,8 @@ function versionLabel(version:any){
   const provider=String(source?.provider||'unknown').toUpperCase()
   const dates=`${specification.start_date||'未知'} 至 ${specification.end_date||'未知'}`
   const identity=String(version.id).slice(0,8)
-  return `${source?.name||provider} · ${dates} · ${symbols.length}只标的 · ${version.row_count||0}行 · ${String(version.content_sha256||'').slice(0,12)} · ${identity}`
+  const universe=specification.universe_policy?.enabled?'动态股票池':'静态候选集'
+  return `${source?.name||provider} · ${dates} · ${symbols.length}只候选 · ${universe} · ${version.row_count||0}行 · ${String(version.content_sha256||'').slice(0,12)} · ${identity}`
 }
 
 async function load(){
@@ -151,6 +154,7 @@ async function load(){
       symbols:Array.isArray(specification.symbols)?specification.symbols.join(','):defaultSyncForm.symbols,
       start_date:specification.start_date||defaultSyncForm.start_date,
       end_date:specification.end_date||defaultSyncForm.end_date,
+      universe_policy:{...defaultSyncForm.universe_policy,...(specification.universe_policy||{})},
     }
   }
   if(!sources.value.some(item=>item.id===syncForm.value.source_id)&&sources.value.length){
@@ -404,6 +408,18 @@ function clearSelectedFactors(){
             <Download :size="20"/>
           </div>
           <div class="field"><label>股票代码（英文逗号分隔）</label><input v-model="syncForm.symbols"/></div>
+          <details class="universe-policy" open>
+            <summary>按日期动态股票池（只使用当时可见数据）</summary>
+            <label class="universe-toggle"><input v-model="syncForm.universe_policy.enabled" type="checkbox"/>启用可交易性与流动性门禁</label>
+            <div class="compact-grid universe-grid">
+              <div class="field"><label>最少历史交易日</label><input v-model.number="syncForm.universe_policy.min_history_days" type="number" min="20" max="1000"/></div>
+              <div class="field"><label>最低价格</label><input v-model.number="syncForm.universe_policy.min_price" type="number" min="0" step=".1"/></div>
+              <div class="field"><label>流动性回看日</label><input v-model.number="syncForm.universe_policy.liquidity_lookback" type="number" min="5" max="252"/></div>
+              <div class="field"><label>最低日均成交额代理</label><input v-model.number="syncForm.universe_policy.min_avg_turnover" type="number" min="0" step="100000"/></div>
+              <div class="field"><label>每日最多成分股</label><input v-model.number="syncForm.universe_policy.max_members" type="number" min="3" max="1000"/></div>
+            </div>
+            <small>候选代码会全部保存，但每个交易日仅将当日满足历史长度、价格、成交量和流动性排名的股票送入因子研究与训练。</small>
+          </details>
           <div class="compact-grid">
             <div class="field"><label>开始日期</label><input v-model="syncForm.start_date" type="date"/></div>
             <div class="field"><label>结束日期</label><input v-model="syncForm.end_date" type="date"/></div>
@@ -671,6 +687,7 @@ function clearSelectedFactors(){
 .advanced-source summary{display:flex;align-items:center;gap:6px;padding:10px 12px;color:#617086;font-size:11px;cursor:pointer}
 .advanced-source-form{grid-template-columns:1fr 1fr 1fr auto;padding:0 12px 12px}
 .compact-action{align-self:end;justify-content:center;white-space:nowrap;margin-bottom:0}
+.universe-policy{margin:12px 0;padding:11px 12px;border:1px solid #dce7f3;border-radius:9px;background:#f8fbff}.universe-policy summary{color:#36516f;font-size:11px;font-weight:700;cursor:pointer}.universe-policy>small{display:block;margin-top:9px;color:#718096;font-size:9px;line-height:1.55}.universe-toggle{display:flex;align-items:center;gap:7px;margin:11px 0;color:#41617f;font-size:10px}.universe-toggle input{width:auto}.universe-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
 .step-output{display:flex;align-items:flex-start;gap:9px;margin-top:13px;padding:10px 12px;border-radius:8px;background:#edf8f4;color:#167b5a}
 .step-output b,.step-output span{display:block}.step-output b{font-size:11px}.step-output span{margin-top:3px;color:#628276;font-size:10px}
 .factor-explainer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#f4f7fb;color:#657387;font-size:10px}
@@ -721,6 +738,6 @@ function clearSelectedFactors(){
 .snapshot-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:13px 0}
 .snapshot-summary>div{padding:10px;border:1px solid #e4e9ef;border-radius:8px;background:#fafbfd}.snapshot-summary small,.snapshot-summary b{display:block}.snapshot-summary small{color:#8b97a7;font-size:9px}.snapshot-summary b{margin-top:4px;color:#344257;font-size:11px}
 .snapshot-actions{display:flex;justify-content:flex-end;gap:8px}.snapshot-action{margin-left:0}.data-pipeline+article.panel,article.panel+article.panel{margin-top:16px}
-@media(max-width:1000px){.pipeline-progress{grid-template-columns:repeat(2,1fr)}.pipeline-progress-item:nth-child(2):after{display:none}.factor-templates{grid-template-columns:repeat(4,minmax(0,1fr))}.factor-form{grid-template-columns:1fr 1fr}.factor-form .compact-action{grid-column:1/-1}.advanced-source-form{grid-template-columns:1fr 1fr}.advanced-source-form .compact-action{grid-column:1/-1}}
+@media(max-width:1000px){.universe-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pipeline-progress{grid-template-columns:repeat(2,1fr)}.pipeline-progress-item:nth-child(2):after{display:none}.factor-templates{grid-template-columns:repeat(4,minmax(0,1fr))}.factor-form{grid-template-columns:1fr 1fr}.factor-form .compact-action{grid-column:1/-1}.advanced-source-form{grid-template-columns:1fr 1fr}.advanced-source-form .compact-action{grid-column:1/-1}}
 @media(max-width:720px){.pipeline-progress{grid-template-columns:1fr}.pipeline-progress-item:after{display:none}.pipeline-title{align-items:flex-start;gap:14px;flex-direction:column}.pipeline-step{grid-template-columns:38px 1fr;padding:0 14px}.pipeline-marker i{width:28px;height:28px}.compact-grid,.source-selector,.factor-form,.snapshot-grid{grid-template-columns:1fr}.factor-templates{grid-template-columns:repeat(2,minmax(0,1fr))}.factor-mode-title,.expression-builder-head{align-items:flex-start;flex-direction:column}.expression-examples{justify-content:flex-start}.advanced-source-form .compact-action,.factor-form .compact-action{grid-column:auto}.selection-summary{flex-wrap:wrap}.selection-summary span{margin-left:0}.snapshot-summary{grid-template-columns:1fr 1fr}.snapshot-actions{align-items:stretch;flex-direction:column}.snapshot-action{width:100%;justify-content:center}}
 </style>

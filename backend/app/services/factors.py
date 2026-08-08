@@ -60,6 +60,13 @@ FACTOR_LIBRARY = (
     FactorTemplate("illiquidity", "非流动性", "liquidity", "绝对收益相对成交额代理的N日均值", 20),
     FactorTemplate("skewness", "收益偏度", "risk", "日收益率的N日滚动偏度", 20),
     FactorTemplate("momentum_acceleration", "动量加速度", "momentum", "短周期与长周期动量之差", 20),
+    FactorTemplate("short_term_reversal", "短期反转", "behavioral", "近期过度涨跌后的价格回归代理", 5),
+    FactorTemplate("relative_strength_12_1", "12-1动量", "momentum", "跳过最近一月的中长期相对强度", 252),
+    FactorTemplate("trend_quality", "趋势质量", "quality", "单位波动率所承载的区间收益", 60),
+    FactorTemplate("drawdown", "回撤压力", "risk", "当前价格相对近期高点的回撤", 60),
+    FactorTemplate("liquidity_trend", "流动性趋势", "liquidity", "近期成交额相对前期的改善程度", 20),
+    FactorTemplate("turnover_stability", "成交稳定性", "liquidity", "成交额变异系数的相反数", 20),
+    FactorTemplate("volume_price_confirmation", "量价确认", "behavioral", "收益方向与异常成交量的共振", 20),
 )
 
 BUILTIN_IMPLEMENTATIONS = frozenset(item.implementation for item in FACTOR_LIBRARY)
@@ -323,4 +330,26 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
         short_window = int(parameters["short_window"])
         long_window = int(parameters["long_window"])
         return close.pct_change(short_window) - close.pct_change(long_window)
+    if implementation == "short_term_reversal":
+        return -close.pct_change(window)
+    if implementation == "relative_strength_12_1":
+        skip = max(1, window // 12)
+        return close.shift(skip) / close.shift(window) - 1
+    if implementation == "trend_quality":
+        realized = returns.rolling(window).std() * np.sqrt(window)
+        return close.pct_change(window) / realized.replace(0, np.nan)
+    if implementation == "drawdown":
+        return close / close.rolling(window).max() - 1
+    if implementation == "liquidity_trend":
+        turnover = close * group["volume"].astype(float)
+        recent = turnover.rolling(window).mean()
+        return recent / recent.shift(window) - 1
+    if implementation == "turnover_stability":
+        turnover = close * group["volume"].astype(float)
+        mean = turnover.rolling(window).mean()
+        return -(turnover.rolling(window).std() / mean.replace(0, np.nan))
+    if implementation == "volume_price_confirmation":
+        volume = group["volume"].astype(float)
+        abnormal_volume = np.log(volume / volume.rolling(window).mean())
+        return close.pct_change(window) * abnormal_volume
     raise ValueError(f"Unsupported factor implementation: {implementation}")
