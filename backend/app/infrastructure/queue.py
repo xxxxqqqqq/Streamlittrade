@@ -50,6 +50,7 @@ def enqueue_by_kind(job_id: UUID, kind: str) -> None:
         "sealed_evaluation": "backend.app.workers.research.evaluate_sealed_model",
         "data_sync": "backend.app.workers.data_catalog.sync_data",
         "feature_materialize": "backend.app.workers.data_catalog.materialize_features",
+        "paper_automation": "backend.app.workers.automation.run_paper_automation",
     }
     if kind not in paths:
         raise ValueError(f"不支持重试的任务类型: {kind}")

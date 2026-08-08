@@ -6,6 +6,6 @@ from backend.app.models.research import Dataset, Experiment, ModelVersion, Predi
 from backend.app.models.identity import AuditLog, AuthSession, Project, ProjectMember, User
 from backend.app.models.paper import PaperAccount, PaperFill, PaperOrder, PaperPosition
 from backend.app.models.data_catalog import DataSource, DataVersion, FactorResearchRun, FeatureDefinition, FeatureSnapshot
-from backend.app.models.operations import AlertEvent, DriftRun, PredictionSchedule
+from backend.app.models.operations import AlertEvent, DriftRun, PaperAutomationRun, PaperAutomationSchedule, PredictionSchedule
 
-__all__ = ["AlertEvent", "AuditLog", "BacktestRun", "Dataset", "DriftRun", "Experiment", "Job", "OutboxEvent", "ModelVersion", "PredictionRun", "SealedEvaluation", "PredictionSchedule", "PaperAccount", "PaperFill", "PaperOrder", "PaperPosition", "Strategy", "User", "Project", "ProjectMember", "DataSource", "DataVersion", "FeatureDefinition", "FeatureSnapshot", "FactorResearchRun"]
+__all__ = ["AlertEvent", "AuditLog", "BacktestRun", "Dataset", "DriftRun", "Experiment", "Job", "OutboxEvent", "ModelVersion", "PredictionRun", "SealedEvaluation", "PredictionSchedule", "PaperAutomationSchedule", "PaperAutomationRun", "PaperAccount", "PaperFill", "PaperOrder", "PaperPosition", "Strategy", "User", "Project", "ProjectMember", "DataSource", "DataVersion", "FeatureDefinition", "FeatureSnapshot", "FactorResearchRun"]
