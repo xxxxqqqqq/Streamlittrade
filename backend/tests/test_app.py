@@ -74,6 +74,9 @@ class ApplicationContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/api/v1/prediction-schedules", document["paths"])
         self.assertIn("/api/v1/paper-automation-schedules", document["paths"])
         self.assertIn("/api/v1/paper-automation-runs", document["paths"])
+        self.assertIn("/api/v1/broker-safety/connections", document["paths"])
+        self.assertIn("/api/v1/broker-safety/connections/{connection_id}/evaluate", document["paths"])
+        self.assertIn("/api/v1/broker-safety/connections/{connection_id}/preview", document["paths"])
         self.assertIn(
             "/api/v1/prediction-schedules/{schedule_id}/run",
             document["paths"],

@@ -6,6 +6,7 @@
 from fastapi import APIRouter
 
 from backend.app.api.backtests import router as backtests_router
+from backend.app.api.broker import router as broker_router
 from backend.app.api.research import router as research_router
 from backend.app.api.auth import router as auth_router
 from backend.app.api.realtime import router as realtime_router
@@ -20,6 +21,7 @@ from backend.app.api.trade_workbench import router as trade_workbench_router
 
 api_router = APIRouter()
 api_router.include_router(backtests_router)
+api_router.include_router(broker_router)
 api_router.include_router(research_router)
 api_router.include_router(auth_router)
 api_router.include_router(realtime_router)
