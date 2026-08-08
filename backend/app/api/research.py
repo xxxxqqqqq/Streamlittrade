@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.app.db.session import get_db_session
 from backend.app.infrastructure.outbox import add_outbox
 from backend.app.models.job import Job
-from backend.app.models.data_catalog import FeatureSnapshot
+from backend.app.models.data_catalog import FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation, Strategy
 from backend.app.schemas.research import (
     DatasetCreate, DatasetRead, ExperimentCreate, ExperimentRead, ModelRead,
@@ -21,6 +21,7 @@ from backend.app.core.security import get_current_user, require_admin
 from backend.app.models.identity import AuditLog, User
 from backend.app.core.projects import ProjectContext, get_project_context
 from backend.app.services.predictions import create_prediction_job
+from backend.app.services.research_gates import validate_factor_dataset_gate
 
 router=APIRouter(tags=["research"], dependencies=[Depends(get_current_user)])
 
@@ -51,9 +52,30 @@ async def create_dataset(body:DatasetCreate,session:AsyncSession=Depends(get_db_
         )
         if snapshot is None or snapshot.status!="ready":
             raise HTTPException(409,"必须选择当前项目内已就绪的特征快照")
+        factor_run=await session.scalar(
+            select(FactorResearchRun).where(
+                FactorResearchRun.id==body.factor_research_id,
+                FactorResearchRun.project_id==context.project.id,
+            )
+        )
+        if factor_run is None:
+            raise HTTPException(409,"必须选择当前项目内的因子研究门禁")
+        try:
+            validate_factor_dataset_gate(
+                snapshot_id=snapshot.id,
+                horizon=body.horizon,
+                training_fraction=body.training_fraction,
+                run_snapshot_id=factor_run.snapshot_id,
+                run_status=factor_run.status,
+                run_parameters=factor_run.parameters,
+                run_metrics=factor_run.metrics,
+                selected_feature_slugs=factor_run.selected_feature_slugs,
+            )
+        except ValueError as exc:
+            raise HTTPException(409,str(exc)) from exc
     jid,did=uuid4(),uuid4(); spec=body.model_dump(mode="json")
     job=Job(id=jid,owner_id=context.user.id,project_id=context.project.id,kind="dataset",status="queued",progress=0,payload={"dataset_id":str(did)})
-    item=Dataset(id=did,project_id=context.project.id,job_id=jid,feature_snapshot_id=body.feature_snapshot_id,name=body.name,status="queued",specification=spec)
+    item=Dataset(id=did,project_id=context.project.id,job_id=jid,feature_snapshot_id=body.feature_snapshot_id,factor_research_id=body.factor_research_id,name=body.name,status="queued",specification=spec)
     session.add(job);await session.flush();session.add(item);add_outbox(session,job,"backend.app.workers.research.build_dataset");await session.commit()
     return TaskSubmission(job_id=jid,resource_id=did)
 

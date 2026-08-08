@@ -13,6 +13,7 @@ const form=ref({
   name:'5日收益因子研究',
   snapshot_id:'',
   forward_period:5,
+  training_fraction:.55,
   quantiles:5,
   min_coverage:.7,
   min_abs_rank_ic:.02,
@@ -111,6 +112,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
           </select>
         </div>
         <div class="field"><label>预测周期（交易日）</label><input v-model.number="form.forward_period" type="number" min="1" max="60"/></div>
+        <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min=".3" max=".8" step=".05"/><small>因子只在训练区筛选</small></div>
         <div class="field"><label>分层数量</label><input v-model.number="form.quantiles" type="number" min="2" max="10"/></div>
         <div class="field"><label>最低覆盖率</label><input v-model.number="form.min_coverage" type="number" min="0" max="1" step=".05"/></div>
         <div class="field"><label>最低 |Rank IC|</label><input v-model.number="form.min_abs_rank_ic" type="number" min="0" max="1" step=".01"/></div>
@@ -135,7 +137,8 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
           <div><small>预测周期</small><b>{{selectedRun.metrics.forward_period}}日</b></div>
           <div><small>检验因子</small><b>{{factorRows.length}}</b></div>
           <div class="passed"><small>通过筛选</small><b>{{selectedRun.selected_feature_slugs.length}}</b></div>
-          <div><small>样本区间</small><b>{{selectedRun.metrics.date_min}} → {{selectedRun.metrics.date_max}}</b></div>
+          <div><small>训练区检验区间</small><b>{{selectedRun.metrics.date_min}} → {{selectedRun.metrics.date_max}}</b></div>
+          <div><small>未读取区域</small><b>{{selectedRun.metrics.research_protocol?.training_boundary}} → {{selectedRun.metrics.full_date_max}}</b></div>
         </div>
 
         <div class="factor-result-table">
@@ -182,10 +185,10 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .factor-hero{display:flex;align-items:center;justify-content:space-between}.factor-hero>svg{color:#45d7c5;opacity:.75}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
-.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(5,.65fr) auto;gap:10px;align-items:end}.research-form .field{margin:0}
+.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(6,.65fr) auto;gap:10px;align-items:end}.research-form .field{margin:0}
 .research-submit{align-self:end;justify-content:center;white-space:nowrap}
 .research-result-head select{min-width:260px}
-.research-kpis{display:grid;grid-template-columns:.7fr .7fr .7fr .7fr 1.5fr;gap:9px;margin-bottom:16px}
+.research-kpis{display:grid;grid-template-columns:repeat(4,.7fr) repeat(2,1.3fr);gap:9px;margin-bottom:16px}
 .research-kpis>div{padding:12px;border:1px solid #e3e9f0;border-radius:9px;background:#fafbfd}.research-kpis small,.research-kpis b{display:block}.research-kpis small{color:#8a96a7;font-size:9px}.research-kpis b{margin-top:5px;color:#344358;font-size:13px}.research-kpis .passed{border-color:#bde8d9;background:#effaf6}.research-kpis .passed b{color:#16805d}
 .factor-result-table{overflow:hidden;border:1px solid #e2e8ef;border-radius:10px}.factor-result-row{display:grid;grid-template-columns:1.2fr .7fr .7fr .7fr .65fr .9fr .7fr 1.3fr;align-items:center;min-width:900px;padding:10px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px}.factor-result-row:first-child{border-top:0}.factor-result-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}.factor-result-row>b{color:#334359}.factor-result-row small{color:#8793a3}.positive{color:#16805d!important}.negative{color:#c65050!important}
 .screen-status{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:12px;background:#f8e9e9;color:#b74646;font-style:normal;font-size:8px}.screen-status.passed{background:#e4f6ef;color:#14785a}

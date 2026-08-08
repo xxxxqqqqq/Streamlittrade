@@ -10,6 +10,7 @@ class DatasetCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     data_source: Literal["feature_snapshot", "demo", "baostock"] = "demo"
     feature_snapshot_id: UUID | None = None
+    factor_research_id: UUID | None = None
     symbols: list[str] = Field(default=["DEMO"], min_length=1, max_length=100)
     start_date: date = date(2018, 1, 1)
     end_date: date = date(2024, 12, 31)
@@ -24,6 +25,7 @@ class DatasetCreate(BaseModel):
             raise ValueError("at least 10% of dates must remain in the final sealed region")
         if self.data_source == "feature_snapshot":
             if self.feature_snapshot_id is None: raise ValueError("正式数据集必须选择特征快照")
+            if self.factor_research_id is None: raise ValueError("正式数据集必须绑定已通过的因子研究门禁")
         elif self.data_source == "demo": self.symbols = [f"DEMO{i+1}" for i in range(max(3, len(self.symbols)))]
         elif any(len(s) != 6 or not s.isdigit() for s in self.symbols): raise ValueError("真实股票代码必须是六位数字")
         return self
@@ -60,7 +62,7 @@ class RecordRead(BaseModel):
 
 
 class DatasetRead(RecordRead):
-    job_id: UUID | None; feature_snapshot_id: UUID | None; specification: dict[str, Any]; row_count: int | None; feature_count: int | None; artifact_uri: str | None; metadata_snapshot: dict[str, Any] | None; error_message: str | None
+    job_id: UUID | None; feature_snapshot_id: UUID | None; factor_research_id: UUID | None; specification: dict[str, Any]; row_count: int | None; feature_count: int | None; artifact_uri: str | None; metadata_snapshot: dict[str, Any] | None; error_message: str | None
 
 
 class ExperimentRead(RecordRead):

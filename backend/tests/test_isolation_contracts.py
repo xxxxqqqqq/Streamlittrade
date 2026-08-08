@@ -5,7 +5,7 @@ import unittest
 from sqlalchemy import UniqueConstraint
 
 from backend.app.models.paper import PaperAccount
-from backend.app.models.research import PredictionRun, SealedEvaluation, Strategy
+from backend.app.models.research import Dataset, PredictionRun, SealedEvaluation, Strategy
 
 
 class IsolationContractTests(unittest.TestCase):
@@ -45,6 +45,14 @@ class IsolationContractTests(unittest.TestCase):
         self.assertIn(("model_id",), unique_columns)
         for name in ("project_id", "dataset_id", "model_id", "job_id"):
             self.assertFalse(table.c[name].nullable)
+
+    def test_dataset_gate_references_an_immutable_factor_research_run(self):
+        column = Dataset.__table__.c.factor_research_id
+        self.assertTrue(column.nullable)  # Legacy datasets remain readable.
+        self.assertEqual(
+            {foreign_key.target_fullname for foreign_key in column.foreign_keys},
+            {"factor_research_runs.id"},
+        )
 
 
 if __name__ == "__main__":

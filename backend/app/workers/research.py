@@ -20,10 +20,11 @@ from sklearn.preprocessing import StandardScaler
 from backend.app.db.sync_session import SyncSessionFactory
 from backend.app.infrastructure.object_storage import download_bytes, upload_bytes
 from backend.app.models.job import Job
-from backend.app.models.data_catalog import DataVersion, FeatureSnapshot
+from backend.app.models.data_catalog import DataVersion, FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation
 from quant_core import fetch_stock_data, generate_demo_stock_data
 from quant_core.ml import FEATURES, build_training_frame, economic_metrics, three_way_research_split
+from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
 
 
 class TaskCanceled(RuntimeError):
@@ -162,6 +163,26 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
         version = session.get(DataVersion, snapshot.data_version_id)
         if not version or version.project_id != project_id or version.status != "ready" or version.layer != "standardized":
             raise LookupError("Feature snapshot has no ready standardized parent")
+        factor_run = session.get(FactorResearchRun, UUID(str(spec["factor_research_id"])))
+        if not factor_run or factor_run.project_id != project_id:
+            raise LookupError("Factor research gate does not exist in this project")
+        feature_columns = validate_factor_dataset_gate(
+            snapshot_id=snapshot.id,
+            horizon=int(spec["horizon"]),
+            training_fraction=float(spec.get("training_fraction", 0.55)),
+            run_snapshot_id=factor_run.snapshot_id,
+            run_status=factor_run.status,
+            run_parameters=factor_run.parameters,
+            run_metrics=factor_run.metrics,
+            selected_feature_slugs=factor_run.selected_feature_slugs,
+        )
+        gate = factor_gate_snapshot(
+            run_id=factor_run.id,
+            snapshot_id=snapshot.id,
+            parameters=dict(factor_run.parameters or {}),
+            metrics=dict(factor_run.metrics or {}),
+            selected=feature_columns,
+        )
         snapshot_uri, version_uri = snapshot.artifact_uri, version.artifact_uri
         snapshot_hash, version_hash = snapshot.content_sha256, version.content_sha256
         lineage = dict(snapshot.lineage or {})
@@ -170,9 +191,10 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
     for frame in (features, market):
         frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
         frame["symbol"] = frame["symbol"].astype(str)
-    feature_columns = [column for column in features.columns if column not in {"date", "symbol"}]
-    if not feature_columns:
-        raise ValueError("Feature snapshot contains no feature columns")
+    missing_features = [column for column in feature_columns if column not in features.columns]
+    if missing_features:
+        raise ValueError(f"Approved factors are missing from snapshot: {', '.join(missing_features)}")
+    features = features[["date", "symbol", *feature_columns]].copy()
     horizon = int(spec["horizon"])
     market = market.sort_values(["symbol", "date"])
     market["future_return"] = market.groupby("symbol")["close"].shift(-horizon) / market["close"] - 1
@@ -192,6 +214,7 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
         "data_version_id": str(snapshot.data_version_id),
         "data_version_sha256": version_hash,
         "lineage": lineage,
+        "factor_gate": gate,
         "dataset_id": str(dataset_id),
     }
 

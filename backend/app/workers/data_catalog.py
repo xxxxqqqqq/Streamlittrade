@@ -11,6 +11,7 @@ from backend.app.infrastructure.object_storage import download_bytes,upload_byte
 from backend.app.models.data_catalog import DataSource,DataVersion,FactorResearchRun,FeatureDefinition,FeatureSnapshot
 from backend.app.models.job import Job
 from backend.app.services.factors import compute_factor
+from backend.app.services.research_gates import factor_training_dates
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
 
 def _progress(jid,value):
@@ -20,6 +21,8 @@ def _progress(jid,value):
         if job:job.progress=value;s.commit()
 def _parquet(frame):
     out=io.BytesIO();frame.to_parquet(out,index=False);return out.getvalue()
+
+
 def _fail(jid,message,records=()):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid)
@@ -170,6 +173,11 @@ def research_factors(job_id:str):
         frame=feature_frame.merge(
             market_frame[["date","symbol","forward_return"]],on=["date","symbol"],how="inner"
         )
+        training_fraction=float(run.parameters.get("training_fraction",.55))
+        research_dates,training_boundary=factor_training_dates(frame["date"],training_fraction,horizon)
+        full_date_min=str(frame["date"].min().date())
+        full_date_max=str(frame["date"].max().date())
+        frame=frame[frame["date"].isin(research_dates)].copy()
         _progress(jid,35)
         results={}
         selected=[]
@@ -215,11 +223,21 @@ def research_factors(job_id:str):
             for left in feature_slugs
         }
         metrics={
+            "evaluation_scope":"factor_training_only",
             "forward_period":horizon,
             "quantiles":int(run.parameters["quantiles"]),
             "sample_rows":int(len(frame)),
             "date_min":str(frame["date"].min().date()),
             "date_max":str(frame["date"].max().date()),
+            "full_date_min":full_date_min,
+            "full_date_max":full_date_max,
+            "research_protocol":{
+                "kind":"factor_training_gate_v1",
+                "training_fraction":training_fraction,
+                "training_boundary":str(pd.Timestamp(training_boundary).date()),
+                "label_purge_days":horizon,
+                "tuning_and_sealed_status":"unread",
+            },
             "factors":results,
             "correlation":correlation_payload,
             "screening":{

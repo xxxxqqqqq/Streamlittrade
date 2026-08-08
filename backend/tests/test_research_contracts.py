@@ -32,13 +32,21 @@ class ResearchContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             DatasetCreate(name="formal dataset", data_source="feature_snapshot")
 
-        snapshot_id=uuid4()
+        snapshot_id, factor_research_id=uuid4(), uuid4()
+        with self.assertRaises(ValidationError):
+            DatasetCreate(
+                name="formal dataset",
+                data_source="feature_snapshot",
+                feature_snapshot_id=snapshot_id,
+            )
         request=DatasetCreate(
             name="formal dataset",
             data_source="feature_snapshot",
             feature_snapshot_id=snapshot_id,
+            factor_research_id=factor_research_id,
         )
         self.assertEqual(request.feature_snapshot_id,snapshot_id)
+        self.assertEqual(request.factor_research_id,factor_research_id)
         self.assertEqual(request.training_fraction, 0.55)
         self.assertEqual(request.tuning_fraction, 0.25)
         self.assertAlmostEqual(1-request.training_fraction-request.tuning_fraction, 0.20)

@@ -39,6 +39,9 @@ class Dataset(Base):
     feature_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("feature_snapshots.id", ondelete="RESTRICT"), nullable=True, index=True
     )
+    factor_research_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("factor_research_runs.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
     specification: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

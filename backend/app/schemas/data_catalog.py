@@ -47,6 +47,7 @@ class CatalogSubmission(BaseModel):
 class FactorResearchCreate(BaseModel):
     name:str=Field(min_length=2,max_length=120);snapshot_id:UUID
     forward_period:int=Field(default=5,ge=1,le=60)
+    training_fraction:float=Field(default=.55,ge=.3,le=.8)
     quantiles:int=Field(default=5,ge=2,le=10)
     min_coverage:float=Field(default=.7,ge=0,le=1)
     min_abs_rank_ic:float=Field(default=.02,ge=0,le=1)

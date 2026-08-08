@@ -9,6 +9,7 @@ const form=ref({
   name:'正式特征研究数据集',
   data_source:'feature_snapshot',
   feature_snapshot_id:'',
+  factor_research_id:'',
   symbols:'DEMO',
   start_date:'2018-01-01',
   end_date:'2024-12-31',
@@ -18,19 +19,47 @@ const form=ref({
   tuning_folds:3,
 })
 const snapshots=ref<any[]>([])
+const factorRuns=ref<any[]>([])
 const submitting=ref(false)
 const error=ref('')
 const job=ref<any>(null)
 const datasetId=ref('')
 const progress=computed(()=>job.value?.progress??0)
 const formalMode=computed(()=>form.value.data_source==='feature_snapshot')
+const eligibleFactorRuns=computed(()=>factorRuns.value.filter(
+  (run:any)=>run.status==='succeeded'
+    &&run.metrics?.evaluation_scope==='factor_training_only'
+    &&run.selected_feature_slugs?.length>0
+))
+const selectedFactorRun=computed(()=>eligibleFactorRuns.value.find(
+  (run:any)=>run.id===form.value.factor_research_id
+))
+const selectedSnapshot=computed(()=>snapshots.value.find(
+  (snapshot:any)=>snapshot.id===form.value.feature_snapshot_id
+))
+
+function applyFactorGate(){
+  const run=selectedFactorRun.value
+  if(!run)return
+  form.value.feature_snapshot_id=run.snapshot_id
+  form.value.horizon=Number(run.parameters?.forward_period||form.value.horizon)
+  form.value.training_fraction=Number(run.parameters?.training_fraction||form.value.training_fraction)
+}
 
 onMounted(async()=>{
   try{
-    snapshots.value=(await api.get('/data-center/materializations')).data.filter(
+    const [snapshotResponse,researchResponse]=await Promise.all([
+      api.get('/data-center/materializations'),
+      api.get('/data-center/factor-research'),
+    ])
+    snapshots.value=snapshotResponse.data.filter(
       (snapshot:any)=>snapshot.status==='ready'
     )
-    if(snapshots.value.length)form.value.feature_snapshot_id=snapshots.value[0].id
+    factorRuns.value=researchResponse.data
+    if(eligibleFactorRuns.value.length){
+      form.value.factor_research_id=eligibleFactorRuns.value[0].id
+      applyFactorGate()
+    }
     else form.value.data_source='demo'
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
@@ -54,6 +83,7 @@ async function submit(){
     const body={
       ...form.value,
       feature_snapshot_id:formalMode.value?form.value.feature_snapshot_id:null,
+      factor_research_id:formalMode.value?form.value.factor_research_id:null,
       symbols,
       horizon:Number(form.value.horizon),
       training_fraction:Number(form.value.training_fraction),
@@ -100,27 +130,33 @@ async function submit(){
           <div class="field">
             <label>构建方式</label>
             <select v-model="form.data_source">
-              <option value="feature_snapshot" :disabled="!snapshots.length">正式特征快照（推荐）</option>
+              <option value="feature_snapshot" :disabled="!eligibleFactorRuns.length">正式特征快照（推荐）</option>
               <option value="demo">演示数据</option>
               <option value="baostock">Baostock 兼容模式</option>
             </select>
           </div>
           <div class="field">
             <label>预测周期（交易日）</label>
-            <input v-model.number="form.horizon" type="number" min="1" max="60" required/>
+            <input v-model.number="form.horizon" type="number" min="1" max="60" required :disabled="formalMode"/>
+            <small v-if="formalMode">由因子研究门禁锁定。</small>
           </div>
-          <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min="0.3" max="0.8" step="0.05" required/><small>只用于初始拟合。</small></div>
+          <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min="0.3" max="0.8" step="0.05" required :disabled="formalMode"/><small>{{formalMode?'由因子研究门禁锁定。':'只用于初始拟合。'}}</small></div>
           <div class="field"><label>调参区比例</label><input v-model.number="form.tuning_fraction" type="number" min="0.1" max="0.4" step="0.05" required/><small>Purged Walk-Forward 只在此区比较模型。</small></div>
           <div class="field"><label>调参折数</label><input v-model.number="form.tuning_folds" type="number" min="2" max="6" required/></div>
           <div class="field"><label>最终封存区</label><input :value="`${Math.round((1-form.training_fraction-form.tuning_fraction)*100)}%`" disabled/><small>模型与参数锁定后只允许开启一次。</small></div>
           <div v-if="formalMode" class="field full">
-            <label>已就绪特征快照</label>
-            <select v-model="form.feature_snapshot_id" required>
-              <option v-for="snapshot in snapshots" :key="snapshot.id" :value="snapshot.id">
-                {{snapshot.name}} · {{snapshot.row_count}}行 · {{snapshot.content_sha256?.slice(0,12)}}
+            <label>因子研究门禁</label>
+            <select v-model="form.factor_research_id" required @change="applyFactorGate">
+              <option v-for="run in eligibleFactorRuns" :key="run.id" :value="run.id">
+                {{run.name}} · 通过 {{run.selected_feature_slugs.length}} 个因子 · 未来 {{run.parameters?.forward_period}}日
               </option>
             </select>
-            <small>训练标签将从该快照绑定的同一标准化行情版本计算。</small>
+            <small>只有研究成功且至少一个因子通过的记录可用；预测周期会自动与研究保持一致。</small>
+          </div>
+          <div v-if="formalMode" class="field full">
+            <label>已就绪特征快照</label>
+            <input :value="selectedSnapshot?`${selectedSnapshot.name} · ${selectedSnapshot.row_count}行 · ${selectedSnapshot.content_sha256?.slice(0,12)}`:'等待选择因子门禁'" disabled/>
+            <small>快照由因子研究自动绑定；数据集只保留通过门禁的因子，被淘汰因子不会进入训练。</small>
           </div>
           <template v-else>
             <div class="field full">
@@ -138,7 +174,7 @@ async function submit(){
         <p v-if="error" class="error-box">{{error}}</p>
         <div class="form-actions">
           <button type="button" class="secondary" @click="router.push('/datasets')">取消</button>
-          <button class="primary" :disabled="submitting||formalMode&&!form.feature_snapshot_id">
+          <button class="primary" :disabled="submitting||formalMode&&(!form.feature_snapshot_id||!form.factor_research_id)">
             <LoaderCircle v-if="submitting" :size="16" class="spin"/>
             <Database v-else :size="16"/>
             {{submitting?'正在构建':'构建数据集'}}
