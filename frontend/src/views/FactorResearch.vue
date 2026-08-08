@@ -18,6 +18,8 @@ const form=ref({
   min_coverage:.7,
   min_abs_rank_ic:.02,
   min_ic_ir:.2,
+  false_discovery_rate:.05,
+  min_ic_observations:30,
 })
 
 const selectedRun=computed(()=>runs.value.find(item=>item.id===selectedRunId.value))
@@ -117,6 +119,8 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
         <div class="field"><label>最低覆盖率</label><input v-model.number="form.min_coverage" type="number" min="0" max="1" step=".05"/></div>
         <div class="field"><label>最低 |Rank IC|</label><input v-model.number="form.min_abs_rank_ic" type="number" min="0" max="1" step=".01"/></div>
         <div class="field"><label>最低 |IC IR|</label><input v-model.number="form.min_ic_ir" type="number" min="0" max="10" step=".1"/></div>
+        <div class="field"><label>假发现率</label><input v-model.number="form.false_discovery_rate" type="number" min=".01" max=".25" step=".01"/></div>
+        <div class="field"><label>最少IC观测</label><input v-model.number="form.min_ic_observations" type="number" min="10" max="1000"/></div>
         <button class="primary research-submit" :disabled="busy||!form.snapshot_id" @click="createResearch">
           <Activity v-if="busy" :size="15"/><FlaskConical v-else :size="15"/>
           {{busy?'正在检验因子…':'运行因子研究'}}
@@ -144,7 +148,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
         <div class="factor-result-table">
           <div class="factor-result-row head">
             <span>因子</span><span>筛选</span><span>覆盖率</span><span>Rank IC</span>
-            <span>IC IR</span><span>年化分层差</span><span>换手率</span><span>结论</span>
+            <span>IC IR</span><span>p 值</span><span>BH q 值</span><span>年化分层差</span><span>换手率</span><span>结论</span>
           </div>
           <div v-for="row in factorRows" :key="row.slug" class="factor-result-row">
             <b>{{row.slug}}</b>
@@ -152,6 +156,8 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
             <span>{{percent(row.coverage)}}</span>
             <span :class="{positive:Number(row.rank_ic_mean)>0,negative:Number(row.rank_ic_mean)<0}">{{number(row.rank_ic_mean)}}</span>
             <span>{{number(row.rank_ic_ir,2)}}</span>
+            <span>{{number(row.rank_ic_p_value,4)}}</span>
+            <span>{{number(row.rank_ic_q_value,4)}}</span>
             <span>{{percent(row.quantile?.annualized_spread)}}</span>
             <span>{{percent(row.quantile?.turnover)}}</span>
             <small>{{row.reasons?.join('、')||'达到全部门槛'}}</small>
@@ -185,12 +191,12 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .factor-hero{display:flex;align-items:center;justify-content:space-between}.factor-hero>svg{color:#45d7c5;opacity:.75}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
-.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(6,.65fr) auto;gap:10px;align-items:end}.research-form .field{margin:0}
+.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(8,.65fr) auto;gap:10px;align-items:end}.research-form .field{margin:0}
 .research-submit{align-self:end;justify-content:center;white-space:nowrap}
 .research-result-head select{min-width:260px}
 .research-kpis{display:grid;grid-template-columns:repeat(4,.7fr) repeat(2,1.3fr);gap:9px;margin-bottom:16px}
 .research-kpis>div{padding:12px;border:1px solid #e3e9f0;border-radius:9px;background:#fafbfd}.research-kpis small,.research-kpis b{display:block}.research-kpis small{color:#8a96a7;font-size:9px}.research-kpis b{margin-top:5px;color:#344358;font-size:13px}.research-kpis .passed{border-color:#bde8d9;background:#effaf6}.research-kpis .passed b{color:#16805d}
-.factor-result-table{overflow:hidden;border:1px solid #e2e8ef;border-radius:10px}.factor-result-row{display:grid;grid-template-columns:1.2fr .7fr .7fr .7fr .65fr .9fr .7fr 1.3fr;align-items:center;min-width:900px;padding:10px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px}.factor-result-row:first-child{border-top:0}.factor-result-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}.factor-result-row>b{color:#334359}.factor-result-row small{color:#8793a3}.positive{color:#16805d!important}.negative{color:#c65050!important}
+.factor-result-table{overflow:hidden;border:1px solid #e2e8ef;border-radius:10px}.factor-result-row{display:grid;grid-template-columns:1.2fr .7fr .7fr .7fr .65fr .65fr .65fr .9fr .7fr 1.3fr;align-items:center;min-width:1120px;padding:10px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px}.factor-result-row:first-child{border-top:0}.factor-result-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}.factor-result-row>b{color:#334359}.factor-result-row small{color:#8793a3}.positive{color:#16805d!important}.negative{color:#c65050!important}
 .screen-status{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:12px;background:#f8e9e9;color:#b74646;font-style:normal;font-size:8px}.screen-status.passed{background:#e4f6ef;color:#14785a}
 .correlation-section{margin-top:22px}.correlation-section h3{margin:0;font-size:14px}.correlation-section p{margin:4px 0 11px;color:#8a96a7;font-size:9px}.correlation-scroll{overflow:auto;border:1px solid #e1e7ee;border-radius:9px}.correlation-grid{display:grid;min-width:max-content}.correlation-grid>*{height:38px;display:grid;place-items:center;padding:0 7px;border-right:1px solid #edf0f4;border-bottom:1px solid #edf0f4;font-size:8px}.correlation-grid>b{overflow:hidden;background:#f7f9fb;color:#69778a;text-overflow:ellipsis;white-space:nowrap}.correlation-grid>span{font-variant-numeric:tabular-nums}
 .research-empty{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}.research-empty span{color:#8b97a7;font-size:10px}

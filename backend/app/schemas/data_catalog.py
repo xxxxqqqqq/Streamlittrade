@@ -62,6 +62,8 @@ class FactorResearchCreate(BaseModel):
     min_coverage:float=Field(default=.7,ge=0,le=1)
     min_abs_rank_ic:float=Field(default=.02,ge=0,le=1)
     min_ic_ir:float=Field(default=.2,ge=0,le=10)
+    false_discovery_rate:float=Field(default=.05,gt=0,le=.25)
+    min_ic_observations:int=Field(default=30,ge=10,le=1000)
 class FactorResearchRead(BaseModel):
     model_config=ConfigDict(from_attributes=True)
     id:UUID;project_id:UUID|None;snapshot_id:UUID;job_id:UUID|None;name:str;status:str

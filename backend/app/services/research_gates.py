@@ -10,6 +10,15 @@ from typing import Any
 from uuid import UUID
 
 
+def calibration_evidence_complete(model_metrics: dict[str, Any] | None) -> bool:
+    """Require both tuning OOS and one-time sealed reliability evidence."""
+    metrics = model_metrics or {}
+    required = {"brier_score", "log_loss", "expected_calibration_error", "bins"}
+    tuning = metrics.get("calibration") or {}
+    sealed = (metrics.get("sealed_evaluation") or {}).get("calibration") or {}
+    return not required.difference(tuning) and not required.difference(sealed)
+
+
 def factor_training_dates(dates, training_fraction: float, horizon: int):
     """Reserve all tuning/sealed dates and purge forward labels at the boundary."""
     unique_dates = np.array(sorted(pd.to_datetime(pd.Series(dates)).dropna().dt.normalize().unique()))
@@ -48,7 +57,10 @@ def validate_factor_dataset_gate(
     metrics = run_metrics or {}
     if metrics.get("evaluation_scope") != "factor_training_only":
         raise ValueError("该因子研究曾读取调参区或封存区，不能用于正式数据集")
-    reported = list((metrics.get("screening") or {}).get("selected") or [])
+    screening = metrics.get("screening") or {}
+    if screening.get("multiple_testing") != "benjamini_hochberg":
+        raise ValueError("该因子研究未经多重试验假发现率控制")
+    reported = list(screening.get("selected") or [])
     factors = metrics.get("factors") or {}
     if selected != reported or any(not (factors.get(slug) or {}).get("passed") for slug in selected):
         raise ValueError("因子研究的通过列表与审查指标不一致")

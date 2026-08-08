@@ -24,6 +24,7 @@ from backend.app.models.data_catalog import DataVersion, FactorResearchRun, Feat
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation
 from quant_core import fetch_stock_data, generate_demo_stock_data
 from quant_core.ml import FEATURES, build_training_frame, economic_metrics, three_way_research_split
+from quant_core.validation import fit_time_ordered_sigmoid, probability_diagnostics
 from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
 
 
@@ -256,18 +257,24 @@ def train_experiment(job_id: str) -> dict:
         for fold in folds:
             _check_cancel(jid)
             train, test = frame.iloc[fold.train_index], frame.iloc[fold.test_index]
-            model = _build_estimator(algorithm, params)
-            model.fit(train[feature_columns], train["label"])
+            model = fit_time_ordered_sigmoid(
+                lambda: _build_estimator(algorithm, params),
+                train[feature_columns], train["label"], train["date"], purge_days=horizon,
+            )
             pred, prob = model.predict(test[feature_columns]), model.predict_proba(test[feature_columns])[:, 1]
+            raw_prob = model.raw_predict_proba(test[feature_columns])[:, 1]
+            fold_calibration = probability_diagnostics(test.label, prob, raw_probability=raw_prob)
             fold_metrics.append({
                 "fold": fold.fold, "train_start": fold.train_start, "train_end": fold.train_end,
                 "test_start": fold.test_start, "test_end": fold.test_end,
                 "train_rows": len(train), "test_rows": len(test),
                 "roc_auc": round(float(roc_auc_score(test.label, prob)), 6),
                 "balanced_accuracy": round(float(balanced_accuracy_score(test.label, pred)), 6),
+                "brier_score": fold_calibration["brier_score"],
+                "expected_calibration_error": fold_calibration["expected_calibration_error"],
             })
             scored = test[["date", "symbol", "future_return", "label"]].copy()
-            scored["prediction"], scored["probability"] = pred, prob
+            scored["prediction"], scored["raw_probability"], scored["probability"] = pred, raw_prob, prob
             prediction_frames.append(scored)
         predictions = pd.concat(prediction_frames, ignore_index=True)
         y_true, y_pred, probability = predictions.label, predictions.prediction, predictions.probability
@@ -277,6 +284,7 @@ def train_experiment(job_id: str) -> dict:
             "precision": round(float(precision_score(y_true, y_pred, zero_division=0)), 6),
             "recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 6),
             "roc_auc": round(float(roc_auc_score(y_true, probability)), 6),
+            "calibration": probability_diagnostics(y_true, probability, raw_probability=predictions.raw_probability),
             "train_rows": int(fold_metrics[-1]["train_rows"]), "test_rows": len(predictions),
             "split": "three_way_purged_walk_forward", "evaluation_scope": "tuning_oos",
             "sealed_status": "locked", "purge_days": horizon, "embargo_days": horizon,
@@ -309,9 +317,11 @@ def train_experiment(job_id: str) -> dict:
                 reverse=True,
             )
         ]
-        final_model = _build_estimator(algorithm, params)
         development = frame.iloc[split.development_index]
-        final_model.fit(development[feature_columns], development["label"])
+        final_model = fit_time_ordered_sigmoid(
+            lambda: _build_estimator(algorithm, params),
+            development[feature_columns], development["label"], development["date"], purge_days=horizon,
+        )
         reproducibility = {
             "schema_version": 1, "random_seed": 42, "dataset": dataset_snapshot,
             "algorithm": algorithm, "parameters": params, "features": feature_columns,
@@ -388,6 +398,10 @@ def evaluate_sealed_model(job_id: str) -> dict:
         sealed = frame.iloc[split.sealed_index].copy()
         estimator = bundle["model"]
         sealed["prediction"] = estimator.predict(sealed[features])
+        sealed["raw_probability"] = (
+            estimator.raw_predict_proba(sealed[features])[:, 1]
+            if hasattr(estimator, "raw_predict_proba") else estimator.predict_proba(sealed[features])[:, 1]
+        )
         sealed["probability"] = estimator.predict_proba(sealed[features])[:, 1]
         metrics = {
             "evaluation_scope": "final_sealed_holdout",
@@ -399,10 +413,13 @@ def evaluate_sealed_model(job_id: str) -> dict:
             "precision": round(float(precision_score(sealed.label, sealed.prediction, zero_division=0)), 6),
             "recall": round(float(recall_score(sealed.label, sealed.prediction, zero_division=0)), 6),
             "roc_auc": round(float(roc_auc_score(sealed.label, sealed.probability)), 6),
+            "calibration": probability_diagnostics(
+                sealed.label, sealed.probability, raw_probability=sealed.raw_probability
+            ),
             **economic_metrics(sealed, horizon=horizon),
         }
         output = io.BytesIO()
-        sealed[["date", "symbol", "future_return", "label", "prediction", "probability"]].to_parquet(output, index=False)
+        sealed[["date", "symbol", "future_return", "label", "prediction", "raw_probability", "probability"]].to_parquet(output, index=False)
         payload = output.getvalue()
         content_hash = hashlib.sha256(payload).hexdigest()
         uri = upload_bytes(
@@ -467,6 +484,8 @@ def run_batch_prediction(job_id: str) -> dict:
         score_frame["prediction"]=estimator.predict(score_frame[feature_columns])
         if hasattr(estimator,"predict_proba"):
             score_frame["probability"]=estimator.predict_proba(score_frame[feature_columns])[:,1]
+            if hasattr(estimator,"raw_predict_proba"):
+                score_frame["raw_probability"]=estimator.raw_predict_proba(score_frame[feature_columns])[:,1]
         else:
             score_frame["probability"]=score_frame["prediction"].astype(float)
         output=score_frame[["date","symbol","prediction","probability"]]

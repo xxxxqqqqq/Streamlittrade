@@ -13,6 +13,7 @@ from backend.app.models.job import Job
 from backend.app.services.factors import compute_factor
 from backend.app.services.research_gates import factor_training_dates
 from backend.app.services.universe import apply_dynamic_universe
+from quant_core.validation import benjamini_hochberg, mean_significance
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
 
 def _progress(jid,value):
@@ -186,7 +187,6 @@ def research_factors(job_id:str):
         frame=frame[frame["date"].isin(research_dates)].copy()
         _progress(jid,35)
         results={}
-        selected=[]
         min_coverage=float(run.parameters["min_coverage"])
         min_abs_rank_ic=float(run.parameters["min_abs_rank_ic"])
         min_ic_ir=float(run.parameters["min_ic_ir"])
@@ -198,16 +198,19 @@ def research_factors(job_id:str):
             rank_ic_std=rank_ic.std()
             rank_ic_ir=float(rank_ic.mean()/rank_ic_std) if len(rank_ic)>1 and rank_ic_std else np.nan
             quantile=_quantile_analysis(frame.assign(**{feature:values}),feature,int(run.parameters["quantiles"]))
-            passed=(
+            preliminary_passed=(
                 coverage>=min_coverage
                 and abs(float(rank_ic.mean()))>=min_abs_rank_ic if len(rank_ic) else False
             )
-            passed=bool(passed and abs(rank_ic_ir)>=min_ic_ir)
+            preliminary_passed=bool(preliminary_passed and abs(rank_ic_ir)>=min_ic_ir)
+            significance=mean_significance(rank_ic)
+            observations=significance["observations"]
+            rank_ic_t_stat=significance["t_stat"]
+            rank_ic_p_value=significance["p_value"]
             reasons=[]
             if coverage<min_coverage:reasons.append("覆盖率不足")
             if not len(rank_ic) or abs(float(rank_ic.mean()))<min_abs_rank_ic:reasons.append("Rank IC不足")
             if not np.isfinite(rank_ic_ir) or abs(rank_ic_ir)<min_ic_ir:reasons.append("IC稳定性不足")
-            if passed:selected.append(feature)
             results[feature]={
                 "coverage":_finite(coverage),
                 "missing_rate":_finite(1-coverage),
@@ -218,11 +221,34 @@ def research_factors(job_id:str):
                 "rank_ic_std":_finite(rank_ic_std),
                 "rank_ic_ir":_finite(rank_ic_ir),
                 "rank_ic_observations":int(len(rank_ic)),
+                "rank_ic_t_stat":_finite(rank_ic_t_stat),
+                "rank_ic_p_value":_finite(rank_ic_p_value),
                 "quantile":quantile,
-                "passed":passed,
+                "preliminary_passed":preliminary_passed,
+                "passed":False,
                 "reasons":reasons,
             }
             _progress(jid,35+45*(index+1)/max(1,len(feature_slugs)))
+        q_values=benjamini_hochberg({
+            feature:metrics.get("rank_ic_p_value") for feature,metrics in results.items()
+        })
+        false_discovery_rate=float(run.parameters.get("false_discovery_rate",.05))
+        min_ic_observations=int(run.parameters.get("min_ic_observations",30))
+        selected=[]
+        for feature,factor_metrics in results.items():
+            q_value=q_values.get(feature)
+            significant=(
+                factor_metrics["rank_ic_observations"]>=min_ic_observations
+                and q_value is not None and q_value<=false_discovery_rate
+            )
+            factor_metrics["rank_ic_q_value"]=q_value
+            factor_metrics["statistically_significant"]=significant
+            factor_metrics["passed"]=bool(factor_metrics.pop("preliminary_passed") and significant)
+            if factor_metrics["rank_ic_observations"]<min_ic_observations:
+                factor_metrics["reasons"].append("有效IC观测数不足")
+            if q_value is None or q_value>false_discovery_rate:
+                factor_metrics["reasons"].append("多重检验后不显著")
+            if factor_metrics["passed"]:selected.append(feature)
         correlation=frame[feature_slugs].replace([np.inf,-np.inf],np.nan).corr(method="spearman")
         correlation_payload={
             left:{right:_finite(correlation.loc[left,right]) for right in feature_slugs}
@@ -253,7 +279,10 @@ def research_factors(job_id:str):
                     "min_coverage":min_coverage,
                     "min_abs_rank_ic":min_abs_rank_ic,
                     "min_ic_ir":min_ic_ir,
+                    "false_discovery_rate":false_discovery_rate,
+                    "min_ic_observations":min_ic_observations,
                 },
+                "multiple_testing":"benjamini_hochberg",
             },
         }
         with SyncSessionFactory() as s:

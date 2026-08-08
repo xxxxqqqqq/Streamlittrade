@@ -21,7 +21,7 @@ from backend.app.core.security import get_current_user, require_admin
 from backend.app.models.identity import AuditLog, User
 from backend.app.core.projects import ProjectContext, get_project_context
 from backend.app.services.predictions import create_prediction_job
-from backend.app.services.research_gates import validate_factor_dataset_gate
+from backend.app.services.research_gates import calibration_evidence_complete, validate_factor_dataset_gate
 
 router=APIRouter(tags=["research"], dependencies=[Depends(get_current_user)])
 
@@ -185,7 +185,13 @@ async def update_model_stage(
             raise HTTPException(409, f"模型缺少可信验证证据: {sorted(missing)}")
         if model.metrics.get("evaluation_scope") == "tuning_oos" and not model.metrics.get("sealed_evaluation"):
             raise HTTPException(409, "三段式研究模型必须先完成唯一一次最终封存区评估")
+        if model.metrics.get("evaluation_scope") == "tuning_oos":
+            if not calibration_evidence_complete(model.metrics):
+                raise HTTPException(409, "模型缺少调参区或最终封存区的概率校准证据")
     if body.stage=="production":
+        if model.metrics.get("evaluation_scope") == "tuning_oos":
+            if not calibration_evidence_complete(model.metrics):
+                raise HTTPException(409, "未通过最终封存区概率校准门禁")
         # 发布只替换当前项目内同算法的生产版本，不能影响其他项目。
         others=(
             await session.scalars(
@@ -223,6 +229,9 @@ async def rollback_model(
     if model.stage not in {"validated","archived"}:raise HTTPException(409,"只有已验证或已归档模型可以回滚到生产")
     required={"roc_auc","rank_ic","cost_adjusted_return","folds"}
     if required.difference(model.metrics):raise HTTPException(409,"模型缺少可信验证证据")
+    if model.metrics.get("evaluation_scope") == "tuning_oos":
+        if not calibration_evidence_complete(model.metrics):
+            raise HTTPException(409, "模型缺少调参区或封存区概率校准证据，不能回滚为生产")
     current=(
         await session.scalars(
             select(ModelVersion).join(Experiment,Experiment.id==ModelVersion.experiment_id).where(

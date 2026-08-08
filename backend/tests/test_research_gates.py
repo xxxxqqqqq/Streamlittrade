@@ -6,7 +6,7 @@ from uuid import uuid4
 import pandas as pd
 
 from backend.app.schemas.data_catalog import FactorResearchCreate
-from backend.app.services.research_gates import factor_gate_snapshot, factor_training_dates, validate_factor_dataset_gate
+from backend.app.services.research_gates import calibration_evidence_complete, factor_gate_snapshot, factor_training_dates, validate_factor_dataset_gate
 
 
 def valid_gate(**overrides):
@@ -20,7 +20,7 @@ def valid_gate(**overrides):
         "run_parameters": {"forward_period": 5, "training_fraction": .55},
         "run_metrics": {
             "evaluation_scope": "factor_training_only",
-            "screening": {"selected": ["value", "quality"]},
+            "screening": {"selected": ["value", "quality"], "multiple_testing": "benjamini_hochberg"},
             "factors": {"value": {"passed": True}, "quality": {"passed": True}},
         },
         "selected_feature_slugs": ["value", "quality"],
@@ -30,6 +30,14 @@ def valid_gate(**overrides):
 
 
 class ResearchGateTests(unittest.TestCase):
+    def test_model_promotion_requires_tuning_and_sealed_calibration(self):
+        calibration = {"brier_score": .24, "log_loss": .68, "expected_calibration_error": .03, "bins": []}
+        self.assertFalse(calibration_evidence_complete({"calibration": calibration}))
+        self.assertTrue(calibration_evidence_complete({
+            "calibration": calibration,
+            "sealed_evaluation": {"calibration": calibration},
+        }))
+
     def test_factor_research_only_reads_the_training_region(self):
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
         research_dates, untouched_start = factor_training_dates(dates, .55, 5)
@@ -63,6 +71,12 @@ class ResearchGateTests(unittest.TestCase):
                 "screening": {"selected": ["value", "quality"]},
                 "factors": {"value": {"passed": True}, "quality": {"passed": True}},
             }))
+
+    def test_factor_gate_requires_multiple_testing_control(self):
+        metrics = valid_gate()["run_metrics"]
+        metrics["screening"].pop("multiple_testing")
+        with self.assertRaisesRegex(ValueError, "假发现率"):
+            validate_factor_dataset_gate(**valid_gate(run_metrics=metrics))
 
     def test_gate_audit_hash_is_deterministic(self):
         run_id, snapshot_id = uuid4(), uuid4()
