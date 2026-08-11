@@ -30,6 +30,25 @@ class MarketDataGovernanceTests(unittest.TestCase):
         self.assertEqual(report.missing_calendar_rows, 1)
         self.assertIn("unbalanced_symbol_calendar", report.warnings)
 
+    def test_quality_gate_normalizes_baostock_suspension_volume(self):
+        data = bars([10, 10], [False, False])
+        data.loc[data.index[1], ["open", "high", "low", "close"]] = 10
+        data.loc[data.index[1], "volume"] = float("nan")
+
+        canonical, report = validate_market_dataset({"A": data})
+
+        self.assertEqual(canonical["A"].loc[data.index[1], "volume"], 0)
+        self.assertTrue(canonical["A"].loc[data.index[1], "is_suspended"])
+        self.assertEqual(report.missing_values, 0)
+        self.assertEqual(report.suspended_rows, 1)
+
+    def test_quality_gate_rejects_ambiguous_missing_volume(self):
+        data = bars([10, 11], [False, False])
+        data.loc[data.index[1], "volume"] = float("nan")
+
+        with self.assertRaisesRegex(ValueError, "missing_required_values"):
+            validate_market_dataset({"A": data})
+
 
 class PortfolioCredibilityTests(unittest.TestCase):
     def test_symbols_share_cash_and_orders_use_next_open(self):

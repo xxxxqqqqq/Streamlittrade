@@ -57,7 +57,20 @@ def standardize_market_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     numeric = [*REQUIRED_MARKET_COLUMNS, "amount", "adj_factor", "limit_up", "limit_down", "cash_dividend", "split_ratio"]
     for column in numeric:
         result[column] = pd.to_numeric(result[column], errors="coerce")
-    result["is_suspended"] = result["is_suspended"].fillna(False).astype(bool) | result["volume"].fillna(0).le(0)
+    explicit_suspension = result["is_suspended"].fillna(False).astype(bool)
+    price_columns = ["open", "high", "low", "close"]
+    complete_prices = result[price_columns].notna().all(axis=1)
+    flat_prices = result[price_columns].nunique(axis=1, dropna=False).eq(1)
+    # Baostock represents some suspension days with a valid, flat reference
+    # price and an empty volume.  Preserve strict rejection for ambiguous
+    # missing volume while normalizing this explicit suspension shape to zero.
+    repairable_suspension_volume = (
+        result["volume"].isna()
+        & complete_prices
+        & (explicit_suspension | flat_prices)
+    )
+    result.loc[repairable_suspension_volume, "volume"] = 0.0
+    result["is_suspended"] = explicit_suspension | result["volume"].fillna(0).le(0)
     result["is_st"] = result["is_st"].fillna(False).astype(bool)
     previous_close = result["close"].shift(1)
     limit_ratio = np.where(result["is_st"], 0.05, 0.10)
