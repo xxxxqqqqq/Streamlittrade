@@ -3,7 +3,7 @@ import {computed,onMounted,ref,watch} from 'vue'
 import {api} from '../api'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
-import {Check,CheckCircle2,Database,Download,Layers3,Plus,Search,Sparkles} from 'lucide-vue-next'
+import {Check,CheckCircle2,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
 
 const sources=ref<any[]>([])
 const versions=ref<any[]>([])
@@ -92,6 +92,9 @@ const filteredFactors=computed(()=>{
   )
 })
 const selectedFactorIds=computed(()=>new Set(materialForm.value.feature_definition_ids))
+const selectedCurrentFactors=computed(()=>
+  currentFactors.value.filter(factor=>selectedFactorIds.value.has(factor.id))
+)
 const allVisibleFactorsSelected=computed(()=>
   filteredFactors.value.length>0
   &&filteredFactors.value.every(factor=>selectedFactorIds.value.has(factor.id))
@@ -308,6 +311,12 @@ function toggleFactor(factorId:string){
   materialForm.value.feature_definition_ids=[...selected]
 }
 
+function removeFactor(factorId:string){
+  materialForm.value.feature_definition_ids=materialForm.value.feature_definition_ids.filter(
+    id=>id!==factorId
+  )
+}
+
 function selectAllVisibleFactors(){
   const selected=new Set(materialForm.value.feature_definition_ids)
   for(const factor of filteredFactors.value)selected.add(factor.id)
@@ -510,10 +519,19 @@ function clearSelectedFactors(){
             </div>
           </template>
           <div v-if="currentFactors.length" class="factor-inventory">
-            <b>当前可用因子</b>
-            <span v-for="factor in currentFactors" :key="factor.id">
-              {{factor.slug}} <small>v{{factor.version}}</small>
-            </span>
+            <b>当前已选因子</b>
+            <button
+              v-for="factor in selectedCurrentFactors"
+              :key="factor.id"
+              type="button"
+              :aria-label="`取消选择因子 ${factor.slug}`"
+              :title="`取消选择 ${factor.slug}`"
+              @click="removeFactor(factor.id)"
+            >
+              <span>{{factor.slug}} <small>v{{factor.version}}</small></span>
+              <X :size="12" aria-hidden="true"/>
+            </button>
+            <span v-if="!selectedCurrentFactors.length" class="factor-inventory-empty">尚未选择因子</span>
           </div>
         </div>
       </div>
@@ -707,7 +725,7 @@ function clearSelectedFactors(){
 .expression-builder textarea{width:100%;resize:vertical;border:1px solid #ccd9e8;border-radius:7px;background:#10233e;color:#bfe1ff;padding:10px;font:10px/1.6 Consolas,monospace}
 .expression-help{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;color:#718096;font-size:8px}.expression-help b{color:#33455c}
 .factor-inventory{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:13px;font-size:10px}
-.factor-inventory>b{color:#566579}.factor-inventory>span{padding:5px 8px;border-radius:6px;background:#f0ebfd;color:#6b4eb7}.factor-inventory small{opacity:.75}
+.factor-inventory>b{color:#566579}.factor-inventory>button{display:inline-flex;align-items:center;gap:5px;padding:5px 6px 5px 8px;border:0;border-radius:6px;background:#f0ebfd;color:#6b4eb7;font:inherit;cursor:pointer;transition:background .15s,color .15s}.factor-inventory>button:hover{background:#e4d9fb;color:#5637a5}.factor-inventory>button:focus-visible{outline:2px solid #8b6ed1;outline-offset:2px}.factor-inventory>button svg{flex:none}.factor-inventory small{opacity:.75}.factor-inventory>.factor-inventory-empty{padding:5px 8px;border-radius:6px;background:#f3f5f8;color:#8a96a6}
 .snapshot-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch;margin-top:12px}
 .snapshot-config-card{min-width:0;padding:13px;border:1px solid #e0e7ef;border-radius:11px;background:#fafbfd}
 .snapshot-config-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
