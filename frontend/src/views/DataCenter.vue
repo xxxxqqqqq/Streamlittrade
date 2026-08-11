@@ -433,9 +433,10 @@ function clearSelectedFactors(){
             <Download :size="20"/>
           </div>
           <div class="compact-grid sync-identity-grid">
-            <div class="field"><label>数据名称</label><input v-model="syncForm.name" maxlength="80" placeholder="例如：主板蓝筹研究数据"/><small>后续数据版本和因子快照会沿用这个短名称。</small></div>
+            <div class="field"><label>数据名称</label><input v-model="syncForm.name" maxlength="80" :title="syncForm.name" placeholder="例如：主板蓝筹研究数据"/></div>
             <div class="field"><label>股票代码（英文逗号分隔）</label><input v-model="syncForm.symbols"/></div>
           </div>
+          <p class="sync-identity-tip">名称会固化到本次数据版本，并自动作为后续因子快照名称的前缀。</p>
           <details class="universe-policy" open>
             <summary>按日期动态股票池（只使用当时可见数据）</summary>
             <label class="universe-toggle"><input v-model="syncForm.universe_policy.enabled" type="checkbox"/>启用可交易性与流动性门禁</label>
@@ -732,7 +733,7 @@ function clearSelectedFactors(){
 .advanced-source-form{grid-template-columns:1fr 1fr 1fr auto;padding:0 12px 12px}
 .compact-action{align-self:end;justify-content:center;white-space:nowrap;margin-bottom:0}
 .universe-policy{margin:12px 0;padding:11px 12px;border:1px solid #dce7f3;border-radius:9px;background:#f8fbff}.universe-policy summary{color:#36516f;font-size:11px;font-weight:700;cursor:pointer}.universe-policy>small{display:block;margin-top:9px;color:#718096;font-size:9px;line-height:1.55}.universe-toggle{display:flex;align-items:center;gap:7px;margin:11px 0;color:#41617f;font-size:10px}.universe-toggle input{width:auto}.universe-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
-.sync-identity-grid{grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr)}.sync-identity-grid .field small{display:block;margin-top:5px;color:#8290a2;font-size:9px}
+.sync-identity-grid{grid-template-columns:minmax(280px,.82fr) minmax(0,1.5fr);align-items:end;gap:14px}.sync-identity-grid .field{min-width:0;margin:0}.sync-identity-grid input{min-width:0}.sync-identity-tip{margin:7px 0 12px;padding-left:1px;color:#8290a2;font-size:9px;line-height:1.45}
 .step-output{display:flex;align-items:flex-start;gap:9px;margin-top:13px;padding:10px 12px;border-radius:8px;background:#edf8f4;color:#167b5a}
 .step-output b,.step-output span{display:block}.step-output b{font-size:11px}.step-output span{margin-top:3px;color:#628276;font-size:10px}
 .factor-explainer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#f4f7fb;color:#657387;font-size:10px}
