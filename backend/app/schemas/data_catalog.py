@@ -20,6 +20,7 @@ class DynamicUniversePolicy(BaseModel):
     min_avg_turnover:float=Field(default=1_000_000.0,ge=0)
     max_members:int=Field(default=100,ge=3,le=1000)
 class SyncCreate(BaseModel):
+    name:str=Field(default="A股日线研究数据",min_length=2,max_length=80)
     source_id:UUID;symbols:list[str]=Field(min_length=1,max_length=100);start_date:date;end_date:date
     universe_policy:DynamicUniversePolicy=Field(default_factory=DynamicUniversePolicy)
     @model_validator(mode="after")

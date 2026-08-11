@@ -72,7 +72,7 @@ def _compute(group,definition):
     return compute_factor(group,definition.implementation,definition.parameters)
 
 
-def _compute_feature_column(frame, definition):
+def _compute_feature_column_with_diagnostics(frame, definition):
     """Return one factor column while preserving the original row order.
 
     ``DataFrameGroupBy.apply`` changes its shape when every group returns a
@@ -84,11 +84,20 @@ def _compute_feature_column(frame, definition):
 
     values = [_compute(group, definition) for _, group in frame.groupby("symbol", sort=False)]
     if not values:
-        return pd.Series(index=frame.index, dtype=float)
+        return pd.Series(index=frame.index, dtype=float), 0
     column = pd.concat(values)
     if not isinstance(column, pd.Series):
         raise ValueError(f"Factor {definition.slug} did not produce a single column")
-    return column.reindex(frame.index)
+    column = column.reindex(frame.index)
+    numeric = pd.to_numeric(column, errors="coerce")
+    non_finite_count = int(np.isinf(numeric).sum())
+    return column.replace([np.inf, -np.inf], np.nan), non_finite_count
+
+
+def _compute_feature_column(frame, definition):
+    """Compute one JSON/Parquet-safe factor column for compatibility callers."""
+
+    return _compute_feature_column_with_diagnostics(frame, definition)[0]
 
 def materialize_features(job_id:str):
     jid=UUID(job_id)
@@ -98,13 +107,20 @@ def materialize_features(job_id:str):
         job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15);snap.status="running";s.commit()
     try:
         frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri))).sort_values(["symbol","date"])
+        non_finite_replacements={}
         for definition in definitions:
-            frame[definition.slug] = _compute_feature_column(frame, definition)
+            column,replaced=_compute_feature_column_with_diagnostics(frame, definition)
+            frame[definition.slug]=column
+            non_finite_replacements[definition.slug]=replaced
         feature_columns=[d.slug for d in definitions]
         universe_columns=[column for column in ("universe_member","universe_rank") if column in frame.columns]
         profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date()),"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})}
         for col in feature_columns:
-            values=frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":round(float(values.mean()),8) if values.notna().any() else None,"std":round(float(values.std()),8) if values.notna().any() else None,"min":round(float(values.min()),8) if values.notna().any() else None,"max":round(float(values.max()),8) if values.notna().any() else None}
+            values=frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":_finite(values.mean()),"std":_finite(values.std()),"min":_finite(values.min()),"max":_finite(values.max()),"non_finite_replaced":non_finite_replacements[col]}
+        profile["warnings"]=[
+            {"code":"non_finite_replaced","feature":slug,"count":count,"message":"非有限因子值已转为空值"}
+            for slug,count in non_finite_replacements.items() if count
+        ]
         payload=_parquet(frame[["date","symbol",*universe_columns,*feature_columns]]);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
         definitions_snapshot=[{"id":str(d.id),"slug":d.slug,"version":d.version,"implementation":d.implementation,"parameters":d.parameters} for d in definitions]
         with SyncSessionFactory() as s:

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import {computed,onMounted,ref} from 'vue'
+import {useRoute} from 'vue-router'
 import {Activity,CheckCircle2,Filter,FlaskConical,RefreshCw,XCircle} from 'lucide-vue-next'
 import {api} from '../api'
+
+const route=useRoute()
 
 const snapshots=ref<any[]>([])
 const runs=ref<any[]>([])
@@ -51,7 +54,9 @@ async function load(){
   ])
   snapshots.value=snapshotResponse.data.filter((item:any)=>item.status==='ready')
   runs.value=runResponse.data
-  if(!form.value.snapshot_id&&snapshots.value.length)form.value.snapshot_id=snapshots.value[0].id
+  const requestedSnapshot=String(route.query.snapshot||'')
+  if(snapshots.value.some((item:any)=>item.id===requestedSnapshot))form.value.snapshot_id=requestedSnapshot
+  else if(!form.value.snapshot_id&&snapshots.value.length)form.value.snapshot_id=snapshots.value[0].id
   if(!runs.value.some(item=>item.id===selectedRunId.value)&&runs.value.length)selectedRunId.value=runs.value[0].id
 }
 

@@ -76,6 +76,19 @@ class UniverseContractTests(unittest.TestCase):
             self.assertEqual(len(values), length)
             self.assertTrue(values.notna().any(), implementation)
 
+    def test_suspended_zero_volume_does_not_create_infinite_factor_values(self):
+        length = 30
+        frame = pd.DataFrame({
+            "open": np.linspace(10, 12, length), "high": np.linspace(11, 13, length),
+            "low": np.linspace(9, 11, length), "close": np.linspace(10, 12, length),
+            "volume": [1000] * 20 + [0] + [1000] * 9,
+        })
+
+        values = compute_factor(frame, "volume_price_confirmation", {"window": 20})
+
+        self.assertFalse(np.isinf(values).any())
+        self.assertTrue(pd.isna(values.iloc[20]))
+
 
 if __name__ == "__main__":
     unittest.main()

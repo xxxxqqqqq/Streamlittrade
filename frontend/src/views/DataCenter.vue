@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import {computed,onMounted,ref,watch} from 'vue'
+import {useRouter} from 'vue-router'
 import {api} from '../api'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
-import {Check,CheckCircle2,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
+import {Check,CheckCircle2,ChevronDown,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
+
+const router=useRouter()
 
 const sources=ref<any[]>([])
 const versions=ref<any[]>([])
@@ -24,6 +27,7 @@ const sourceForm=ref({
   configuration:{},
 })
 type SyncDraft={
+  name:string
   source_id:string
   symbols:string
   start_date:string
@@ -32,6 +36,7 @@ type SyncDraft={
 }
 
 const defaultSyncForm:SyncDraft={
+  name:'A股日线研究数据',
   source_id:'',
   symbols:'DEMO1,DEMO2,DEMO3,DEMO4,DEMO5',
   start_date:'2018-01-01',
@@ -61,7 +66,7 @@ const featureForm=ref({
   description:'过去20个交易日收益率',
 })
 const materialForm=ref({
-  name:'基础量价特征快照',
+  name:'A股日线研究数据 · 因子快照',
   data_version_id:'',
   feature_definition_ids:[] as string[],
 })
@@ -123,16 +128,25 @@ function versionSource(version:any){
   return sources.value.find(source=>source.id===version.source_id)
 }
 
-function versionLabel(version:any){
-  const specification=version.specification||{}
-  const source=versionSource(version)
-  const symbols=Array.isArray(specification.symbols)?specification.symbols:[]
-  const provider=String(source?.provider||'unknown').toUpperCase()
-  const dates=`${specification.start_date||'未知'} 至 ${specification.end_date||'未知'}`
-  const identity=String(version.id).slice(0,8)
-  const universe=specification.universe_policy?.enabled?'动态股票池':'静态候选集'
-  return `${source?.name||provider} · ${dates} · ${symbols.length}只候选 · ${universe} · ${version.row_count||0}行 · ${String(version.content_sha256||'').slice(0,12)} · ${identity}`
+function dataVersionName(version:any){
+  return String(version?.specification?.name||versionSource(version)?.name||'行情研究数据')
 }
+
+function versionLabel(version:any){
+  return `${dataVersionName(version)} · ${String(version.id).slice(0,8)}`
+}
+
+function versionMeta(version:any){
+  const specification=version?.specification||{}
+  const symbols=Array.isArray(specification.symbols)?specification.symbols:[]
+  return `${specification.start_date||'未知'} 至 ${specification.end_date||'未知'} · ${symbols.length}只股票 · ${version?.row_count||0}行`
+}
+
+watch(()=>materialForm.value.data_version_id,(versionId,previousId)=>{
+  if(!versionId||versionId===previousId)return
+  const version=readyVersions.value.find(item=>item.id===versionId)
+  if(version)materialForm.value.name=`${dataVersionName(version)} · 因子快照`
+})
 
 async function load(){
   const [sourceResponse,versionResponse,featureResponse,snapshotResponse,libraryResponse]=await Promise.all([
@@ -153,6 +167,7 @@ async function load(){
     const latest=readyVersions.value[0]
     const specification=latest.specification||{}
     syncForm.value={
+      name:specification.name||dataVersionName(latest),
       source_id:latest.source_id,
       symbols:Array.isArray(specification.symbols)?specification.symbols.join(','):defaultSyncForm.symbols,
       start_date:specification.start_date||defaultSyncForm.start_date,
@@ -222,6 +237,7 @@ async function sync(){
     await wait(response.data.job_id)
     await load()
     materialForm.value.data_version_id=response.data.resource_id
+    materialForm.value.name=`${syncForm.value.name} · 因子快照`
     notice.value='数据同步与质量检查完成，新的 Standardized 版本已自动带入因子快照。'
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
@@ -271,7 +287,7 @@ async function materialize(){
     const response=await api.post('/data-center/materializations',materialForm.value)
     await wait(response.data.job_id)
     await load()
-    notice.value='因子快照已生成，可以进入“研究数据集”开始构建训练样本。'
+    await router.push({path:'/factor-research',query:{snapshot:response.data.resource_id}})
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
   }finally{
@@ -416,7 +432,10 @@ function clearSelectedFactors(){
             <div><h3>同步并标准化行情</h3><p>一次任务同时生成 Raw 原始层、Standardized 标准层和质量报告。</p></div>
             <Download :size="20"/>
           </div>
-          <div class="field"><label>股票代码（英文逗号分隔）</label><input v-model="syncForm.symbols"/></div>
+          <div class="compact-grid sync-identity-grid">
+            <div class="field"><label>数据名称</label><input v-model="syncForm.name" maxlength="80" placeholder="例如：主板蓝筹研究数据"/><small>后续数据版本和因子快照会沿用这个短名称。</small></div>
+            <div class="field"><label>股票代码（英文逗号分隔）</label><input v-model="syncForm.symbols"/></div>
+          </div>
           <details class="universe-policy" open>
             <summary>按日期动态股票池（只使用当时可见数据）</summary>
             <label class="universe-toggle"><input v-model="syncForm.universe_policy.enabled" type="checkbox"/>启用可交易性与流动性门禁</label>
@@ -438,7 +457,7 @@ function clearSelectedFactors(){
           </div>
           <div v-if="selectedVersion" class="step-output">
             <CheckCircle2 :size="16"/>
-            <div><b>当前可用标准版本</b><span>{{versionLabel(selectedVersion)}}</span></div>
+            <div><b>{{dataVersionName(selectedVersion)}}</b><span>{{versionMeta(selectedVersion)}}</span></div>
           </div>
         </div>
       </div>
@@ -550,17 +569,24 @@ function clearSelectedFactors(){
                 <div><b>标准数据版本</b><small>选择通过质量门禁的行情版本</small></div>
                 <Database :size="17"/>
               </div>
-              <select v-model="materialForm.data_version_id" class="version-select">
-                <option disabled value="">请选择已就绪的标准数据版本</option>
-                <option v-for="version in readyVersions" :key="version.id" :value="version.id">
-                  {{versionLabel(version)}}
-                </option>
-              </select>
+              <label class="version-picker-shell">
+                <Database :size="17"/>
+                <span>
+                  <small>当前数据</small>
+                  <select v-model="materialForm.data_version_id" class="version-select">
+                    <option disabled value="">请选择标准数据版本</option>
+                    <option v-for="version in readyVersions" :key="version.id" :value="version.id">
+                      {{versionLabel(version)}}
+                    </option>
+                  </select>
+                </span>
+                <ChevronDown :size="16"/>
+              </label>
               <div v-if="selectedVersion" class="version-lock">
                 <CheckCircle2 :size="18"/>
                 <div>
-                  <b>输入数据已锁定</b>
-                  <span>{{versionSource(selectedVersion)?.name||'标准行情'}} · STANDARDIZED</span>
+                  <b>{{dataVersionName(selectedVersion)}}</b>
+                  <span>{{versionMeta(selectedVersion)}}</span>
                   <code>{{String(selectedVersion.content_sha256||'').slice(0,20)}}…</code>
                 </div>
               </div>
@@ -651,9 +677,9 @@ function clearSelectedFactors(){
     <article class="panel">
       <div class="panel-head"><div><h3>数据版本与质量</h3><p>最近200个不可变数据资产</p></div></div>
       <div class="table">
-        <div class="tr th"><span>层级</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
+        <div class="tr th"><span>数据名称 / 层级</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
         <RouterLink v-for="version in versions" :key="version.id" class="tr product-link-row" :to="`/data-center/versions/${version.id}`">
-          <b>{{version.layer}}</b>
+          <b>{{dataVersionName(version)}} · {{version.layer}}</b>
           <span><i class="status" :class="version.status">{{version.status}}</i></span>
           <span>{{version.row_count||'—'}}</span>
           <code>{{version.content_sha256?.slice(0,16)||'—'}}</code>
@@ -706,6 +732,7 @@ function clearSelectedFactors(){
 .advanced-source-form{grid-template-columns:1fr 1fr 1fr auto;padding:0 12px 12px}
 .compact-action{align-self:end;justify-content:center;white-space:nowrap;margin-bottom:0}
 .universe-policy{margin:12px 0;padding:11px 12px;border:1px solid #dce7f3;border-radius:9px;background:#f8fbff}.universe-policy summary{color:#36516f;font-size:11px;font-weight:700;cursor:pointer}.universe-policy>small{display:block;margin-top:9px;color:#718096;font-size:9px;line-height:1.55}.universe-toggle{display:flex;align-items:center;gap:7px;margin:11px 0;color:#41617f;font-size:10px}.universe-toggle input{width:auto}.universe-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
+.sync-identity-grid{grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr)}.sync-identity-grid .field small{display:block;margin-top:5px;color:#8290a2;font-size:9px}
 .step-output{display:flex;align-items:flex-start;gap:9px;margin-top:13px;padding:10px 12px;border-radius:8px;background:#edf8f4;color:#167b5a}
 .step-output b,.step-output span{display:block}.step-output b{font-size:11px}.step-output span{margin-top:3px;color:#628276;font-size:10px}
 .factor-explainer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#f4f7fb;color:#657387;font-size:10px}
@@ -731,7 +758,8 @@ function clearSelectedFactors(){
 .snapshot-config-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
 .snapshot-config-head b,.snapshot-config-head small{display:block}.snapshot-config-head b{color:#304057;font-size:11px}.snapshot-config-head small{margin-top:3px;color:#8a96a6;font-size:9px;font-weight:400}
 .snapshot-config-head>svg{flex:none;color:#3978c8}
-.version-config{display:flex;flex-direction:column}.version-select{width:100%;height:42px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#fff;font-size:11px}
+.version-config{display:flex;flex-direction:column;background:linear-gradient(145deg,#fbfdff,#f5f9ff)}
+.version-picker-shell{display:grid;grid-template-columns:34px minmax(0,1fr) 18px;align-items:center;gap:8px;margin:0;padding:9px 11px;border:1px solid #bfd4ee;border-radius:11px;background:#fff;box-shadow:0 5px 16px rgba(36,84,137,.07);color:#1768d7;cursor:pointer;transition:border-color .18s,box-shadow .18s,transform .18s}.version-picker-shell:hover{border-color:#79a9e4;box-shadow:0 7px 20px rgba(36,84,137,.11);transform:translateY(-1px)}.version-picker-shell:focus-within{border-color:#1768d7;box-shadow:0 0 0 3px rgba(23,104,215,.11)}.version-picker-shell>svg:first-child{box-sizing:content-box;padding:7px;border-radius:8px;background:#edf5ff}.version-picker-shell>span{min-width:0}.version-picker-shell small{display:block;margin-bottom:2px;color:#8a96a6;font-size:8px;font-weight:600}.version-select{width:100%;height:22px;padding:0 24px 0 0;border:0;outline:0;appearance:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:transparent;color:#304057;font-size:11px;font-weight:700;cursor:pointer}.version-picker-shell>svg:last-child{color:#708198;pointer-events:none}
 .version-lock{display:flex;align-items:flex-start;gap:9px;margin-top:10px;padding:12px;border:1px solid #cce9de;border-radius:8px;background:#eef9f5;color:#167b5a}
 .version-lock>svg{flex:none;margin-top:1px}.version-lock b,.version-lock span,.version-lock code{display:block}.version-lock b{font-size:10px}.version-lock span{margin-top:3px;color:#67877c;font-size:9px}.version-lock code{margin-top:6px;color:#5d776f;font-size:8px}
 .snapshot-card-tip{margin:auto 0 0;padding-top:12px;color:#8995a5;font-size:9px;line-height:1.5}
@@ -757,5 +785,5 @@ function clearSelectedFactors(){
 .snapshot-summary>div{padding:10px;border:1px solid #e4e9ef;border-radius:8px;background:#fafbfd}.snapshot-summary small,.snapshot-summary b{display:block}.snapshot-summary small{color:#8b97a7;font-size:9px}.snapshot-summary b{margin-top:4px;color:#344257;font-size:11px}
 .snapshot-actions{display:flex;justify-content:flex-end;gap:8px}.snapshot-action{margin-left:0}.data-pipeline+article.panel,article.panel+article.panel{margin-top:16px}
 @media(max-width:1000px){.universe-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pipeline-progress{grid-template-columns:repeat(2,1fr)}.pipeline-progress-item:nth-child(2):after{display:none}.factor-templates{grid-template-columns:repeat(4,minmax(0,1fr))}.factor-form{grid-template-columns:1fr 1fr}.factor-form .compact-action{grid-column:1/-1}.advanced-source-form{grid-template-columns:1fr 1fr}.advanced-source-form .compact-action{grid-column:1/-1}}
-@media(max-width:720px){.pipeline-progress{grid-template-columns:1fr}.pipeline-progress-item:after{display:none}.pipeline-title{align-items:flex-start;gap:14px;flex-direction:column}.pipeline-step{grid-template-columns:38px 1fr;padding:0 14px}.pipeline-marker i{width:28px;height:28px}.compact-grid,.source-selector,.factor-form,.snapshot-grid{grid-template-columns:1fr}.factor-templates{grid-template-columns:repeat(2,minmax(0,1fr))}.factor-mode-title,.expression-builder-head{align-items:flex-start;flex-direction:column}.expression-examples{justify-content:flex-start}.advanced-source-form .compact-action,.factor-form .compact-action{grid-column:auto}.selection-summary{flex-wrap:wrap}.selection-summary span{margin-left:0}.snapshot-summary{grid-template-columns:1fr 1fr}.snapshot-actions{align-items:stretch;flex-direction:column}.snapshot-action{width:100%;justify-content:center}}
+@media(max-width:720px){.pipeline-progress{grid-template-columns:1fr}.pipeline-progress-item:after{display:none}.pipeline-title{align-items:flex-start;gap:14px;flex-direction:column}.pipeline-step{grid-template-columns:38px 1fr;padding:0 14px}.pipeline-marker i{width:28px;height:28px}.compact-grid,.source-selector,.factor-form,.snapshot-grid,.sync-identity-grid{grid-template-columns:1fr}.factor-templates{grid-template-columns:repeat(2,minmax(0,1fr))}.factor-mode-title,.expression-builder-head{align-items:flex-start;flex-direction:column}.expression-examples{justify-content:flex-start}.advanced-source-form .compact-action,.factor-form .compact-action{grid-column:auto}.selection-summary{flex-wrap:wrap}.selection-summary span{margin-left:0}.snapshot-summary{grid-template-columns:1fr 1fr}.snapshot-actions{align-items:stretch;flex-direction:column}.snapshot-action{width:100%;justify-content:center}}
 </style>

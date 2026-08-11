@@ -5,6 +5,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import pandas as pd
+import numpy as np
 from pydantic import ValidationError
 
 from backend.app.schemas.data_catalog import FeatureCreate, SyncCreate
@@ -21,6 +22,16 @@ class DataCatalogContractTests(unittest.TestCase):
                 start_date=date(2024, 1, 2),
                 end_date=date(2024, 1, 1),
             )
+
+    def test_sync_has_a_short_version_name(self):
+        request = SyncCreate(
+            name="主板蓝筹研究数据",
+            source_id="00000000-0000-0000-0000-000000000001",
+            symbols=["600000"],
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 2, 1),
+        )
+        self.assertEqual(request.name, "主板蓝筹研究数据")
 
     def test_feature_implementation_is_allow_listed(self):
         with self.assertRaises(ValidationError):
@@ -103,6 +114,22 @@ class DataCatalogContractTests(unittest.TestCase):
         frame[definition.slug] = column
         self.assertAlmostEqual(frame.loc[1, definition.slug], 0.1)
         self.assertAlmostEqual(frame.loc[3, definition.slug], 0.1)
+
+    def test_materialized_factor_replaces_infinity_with_missing_value(self):
+        frame = pd.DataFrame(
+            {
+                "symbol": ["000001"] * 3,
+                "date": pd.date_range("2024-01-01", periods=3),
+                "open": [10, 10, 10], "high": [10, 10, 10],
+                "low": [10, 10, 10], "close": [10, 10, 10],
+                "volume": [0, 0, 100],
+            }
+        )
+        definition = SimpleNamespace(slug="unsafe", implementation="volume_ratio", parameters={"window": 2})
+
+        column = _compute_feature_column(frame, definition)
+
+        self.assertFalse(np.isinf(column).any())
 
 
 if __name__ == "__main__":

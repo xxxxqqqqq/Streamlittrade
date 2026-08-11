@@ -350,6 +350,9 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
         return -(turnover.rolling(window).std() / mean.replace(0, np.nan))
     if implementation == "volume_price_confirmation":
         volume = group["volume"].astype(float)
-        abnormal_volume = np.log(volume / volume.rolling(window).mean())
+        # A suspended stock legitimately has zero volume.  Its logarithmic
+        # volume surprise is undefined, not positive/negative infinity.
+        volume_ratio = volume / volume.rolling(window).mean().replace(0, np.nan)
+        abnormal_volume = np.log(volume_ratio.where(volume_ratio > 0))
         return close.pct_change(window) * abnormal_volume
     raise ValueError(f"Unsupported factor implementation: {implementation}")
