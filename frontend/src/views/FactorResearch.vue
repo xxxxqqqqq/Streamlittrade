@@ -196,7 +196,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .factor-hero{display:flex;align-items:center;justify-content:space-between}.factor-hero>svg{color:#45d7c5;opacity:.75}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
-.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(8,.65fr) auto;gap:10px;align-items:end}.research-form .field{min-width:0;margin:0}.research-form .field>label{white-space:nowrap}
+.research-form{display:grid;grid-template-columns:minmax(150px,1fr) minmax(270px,1.6fr) repeat(8,minmax(112px,.72fr)) minmax(172px,auto);gap:10px;align-items:end}.research-form .field{min-width:0;margin:0}.research-form .field>label{white-space:nowrap}
 .research-submit{align-self:end;justify-content:center;white-space:nowrap}
 .research-result-head select{min-width:260px}
 .research-kpis{display:grid;grid-template-columns:repeat(4,.7fr) repeat(2,1.3fr);gap:9px;margin-bottom:16px}
@@ -205,6 +205,6 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .screen-status{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:12px;background:#f8e9e9;color:#b74646;font-style:normal;font-size:8px}.screen-status.passed{background:#e4f6ef;color:#14785a}
 .correlation-section{margin-top:22px}.correlation-section h3{margin:0;font-size:14px}.correlation-section p{margin:4px 0 11px;color:#8a96a7;font-size:9px}.correlation-scroll{overflow:auto;border:1px solid #e1e7ee;border-radius:9px}.correlation-grid{display:grid;min-width:max-content}.correlation-grid>*{height:38px;display:grid;place-items:center;padding:0 7px;border-right:1px solid #edf0f4;border-bottom:1px solid #edf0f4;font-size:8px}.correlation-grid>b{overflow:hidden;background:#f7f9fb;color:#69778a;text-overflow:ellipsis;white-space:nowrap}.correlation-grid>span{font-variant-numeric:tabular-nums}
 .research-empty{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}.research-empty span{color:#8b97a7;font-size:10px}
-@media(max-width:1200px){.research-form{grid-template-columns:repeat(4,1fr)}.snapshot-field{grid-column:span 2}.research-submit{grid-column:span 2}.research-kpis{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:1800px){.research-form{grid-template-columns:repeat(5,minmax(0,1fr))}.snapshot-field{grid-column:span 2}.research-submit{grid-column:span 2}.research-kpis{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:720px){.research-form{grid-template-columns:1fr 1fr}.snapshot-field,.research-submit{grid-column:1/-1}.research-result-head{align-items:flex-start;flex-direction:column}.research-result-head select{width:100%;min-width:0}.research-kpis{grid-template-columns:1fr 1fr}.research-kpis>div:last-child{grid-column:1/-1}}
 </style>
