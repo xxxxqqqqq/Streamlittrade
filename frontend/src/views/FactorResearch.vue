@@ -119,7 +119,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
           </select>
         </div>
         <div class="field"><label>预测周期（交易日）</label><input v-model.number="form.forward_period" type="number" min="1" max="60"/></div>
-        <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min=".3" max=".8" step=".05"/><small>因子只在训练区筛选</small></div>
+        <div class="field"><label title="因子仅使用训练区数据筛选，调参区和最终封存区不会参与本步骤。">训练区比例</label><input v-model.number="form.training_fraction" type="number" min=".3" max=".8" step=".05"/></div>
         <div class="field"><label>分层数量</label><input v-model.number="form.quantiles" type="number" min="2" max="10"/></div>
         <div class="field"><label>最低覆盖率</label><input v-model.number="form.min_coverage" type="number" min="0" max="1" step=".05"/></div>
         <div class="field"><label>最低 |Rank IC|</label><input v-model.number="form.min_abs_rank_ic" type="number" min="0" max="1" step=".01"/></div>
@@ -196,7 +196,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .factor-hero{display:flex;align-items:center;justify-content:space-between}.factor-hero>svg{color:#45d7c5;opacity:.75}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
-.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(8,.65fr) auto;gap:10px;align-items:end}.research-form .field{margin:0}
+.research-form{display:grid;grid-template-columns:1fr 1.5fr repeat(8,.65fr) auto;gap:10px;align-items:end}.research-form .field{min-width:0;margin:0}.research-form .field>label{white-space:nowrap}
 .research-submit{align-self:end;justify-content:center;white-space:nowrap}
 .research-result-head select{min-width:260px}
 .research-kpis{display:grid;grid-template-columns:repeat(4,.7fr) repeat(2,1.3fr);gap:9px;margin-bottom:16px}
