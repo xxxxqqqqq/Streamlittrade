@@ -101,6 +101,10 @@ class ApplicationContractTests(unittest.IsolatedAsyncioTestCase):
             document["paths"],
         )
         self.assertIn(
+            "/api/v1/data-center/versions/{version_id}/download",
+            document["paths"],
+        )
+        self.assertIn(
             "/api/v1/data-center/materializations/{snapshot_id}",
             document["paths"],
         )

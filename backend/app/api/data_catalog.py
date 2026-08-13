@@ -1,7 +1,10 @@
 """Versioned data-center and feature-registry endpoints."""
 
+import io
+from urllib.parse import quote
 from uuid import UUID,uuid4
-from fastapi import APIRouter,Depends,HTTPException
+import pandas as pd
+from fastapi import APIRouter,Depends,HTTPException,Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.security import get_current_user,require_admin
@@ -12,6 +15,8 @@ from backend.app.models.data_catalog import DataSource,DataVersion,FactorResearc
 from backend.app.models.job import Job
 from backend.app.schemas.data_catalog import *
 from backend.app.services.factors import factor_library_payload
+from backend.app.infrastructure.object_storage import download_bytes
+from backend.app.services.catalog_export import version_frame_to_csv
 
 router=APIRouter(prefix="/data-center",tags=["data-center"],dependencies=[Depends(get_current_user)])
 
@@ -42,6 +47,21 @@ async def version_detail(version_id:UUID,session:AsyncSession=Depends(get_db_ses
     item=await session.scalar(select(DataVersion).where(DataVersion.id==version_id,DataVersion.project_id==context.project.id))
     if item is None:raise HTTPException(404,"Data version not found")
     return item
+@router.get("/versions/{version_id}/download")
+async def download_version_csv(version_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    """Download every immutable market row as a spreadsheet-friendly CSV."""
+    item=await session.scalar(select(DataVersion).where(DataVersion.id==version_id,DataVersion.project_id==context.project.id))
+    if item is None:raise HTTPException(404,"Data version not found")
+    if item.status!="ready" or not item.artifact_uri:raise HTTPException(409,"ready data version with an artifact is required")
+    try:
+        frame=pd.read_parquet(io.BytesIO(download_bytes(item.artifact_uri)))
+        payload=version_frame_to_csv(frame)
+    except Exception as exc:
+        raise HTTPException(502,"Unable to prepare data version download") from exc
+    title=str((item.specification or {}).get("name") or "data-version")
+    filename=f"{title}-{item.layer}-{str(item.id)[:8]}.csv"
+    disposition=f"attachment; filename=data-version-{str(item.id)[:8]}.csv; filename*=UTF-8''{quote(filename)}"
+    return Response(payload,media_type="text/csv; charset=utf-8",headers={"Content-Disposition":disposition})
 @router.post("/features",response_model=FeatureRead,status_code=201,dependencies=[Depends(require_admin)])
 async def create_feature(body:FeatureCreate,session:AsyncSession=Depends(get_db_session)):
     latest=await session.scalar(select(FeatureDefinition).where(FeatureDefinition.slug==body.slug).order_by(FeatureDefinition.version.desc()))
