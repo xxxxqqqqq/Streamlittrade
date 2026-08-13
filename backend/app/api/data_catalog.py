@@ -7,6 +7,7 @@ import pandas as pd
 from fastapi import APIRouter,Depends,HTTPException,Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 from backend.app.core.security import get_current_user,require_admin
 from backend.app.db.session import get_db_session
 from backend.app.infrastructure.outbox import add_outbox
@@ -62,6 +63,18 @@ async def download_version_csv(version_id:UUID,session:AsyncSession=Depends(get_
     filename=f"{title}-{item.layer}-{str(item.id)[:8]}.csv"
     disposition=f"attachment; filename=data-version-{str(item.id)[:8]}.csv; filename*=UTF-8''{quote(filename)}"
     return Response(payload,media_type="text/csv; charset=utf-8",headers={"Content-Disposition":disposition})
+@router.get("/versions/{version_id}/artifact")
+async def download_version_parquet(version_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    """Download the exact immutable Parquet artifact used by downstream research."""
+    item=await session.scalar(select(DataVersion).where(DataVersion.id==version_id,DataVersion.project_id==context.project.id))
+    if item is None:raise HTTPException(404,"Data version not found")
+    if item.status!="ready" or not item.artifact_uri:raise HTTPException(409,"ready data version with an artifact is required")
+    try:payload=await run_in_threadpool(download_bytes,item.artifact_uri)
+    except Exception as exc:raise HTTPException(502,"Unable to download data version artifact") from exc
+    title=str((item.specification or {}).get("name") or "data-version")
+    filename=f"{title}-{item.layer}-{str(item.id)[:8]}.parquet"
+    disposition=f"attachment; filename=data-version-{str(item.id)[:8]}.parquet; filename*=UTF-8''{quote(filename)}"
+    return Response(payload,media_type="application/vnd.apache.parquet",headers={"Content-Disposition":disposition})
 @router.post("/features",response_model=FeatureRead,status_code=201,dependencies=[Depends(require_admin)])
 async def create_feature(body:FeatureCreate,session:AsyncSession=Depends(get_db_session)):
     latest=await session.scalar(select(FeatureDefinition).where(FeatureDefinition.slug==body.slug).order_by(FeatureDefinition.version.desc()))
@@ -87,6 +100,16 @@ async def snapshot_detail(snapshot_id:UUID,session:AsyncSession=Depends(get_db_s
     item=await session.scalar(select(FeatureSnapshot).where(FeatureSnapshot.id==snapshot_id,FeatureSnapshot.project_id==context.project.id))
     if item is None:raise HTTPException(404,"Feature snapshot not found")
     return item
+@router.get("/materializations/{snapshot_id}/artifact")
+async def download_snapshot_parquet(snapshot_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    item=await session.scalar(select(FeatureSnapshot).where(FeatureSnapshot.id==snapshot_id,FeatureSnapshot.project_id==context.project.id))
+    if item is None:raise HTTPException(404,"Feature snapshot not found")
+    if item.status!="ready" or not item.artifact_uri:raise HTTPException(409,"ready feature snapshot with an artifact is required")
+    try:payload=await run_in_threadpool(download_bytes,item.artifact_uri)
+    except Exception as exc:raise HTTPException(502,"Unable to download feature snapshot artifact") from exc
+    filename=f"{item.name}-{str(item.id)[:8]}.parquet"
+    disposition=f"attachment; filename=feature-snapshot-{str(item.id)[:8]}.parquet; filename*=UTF-8''{quote(filename)}"
+    return Response(payload,media_type="application/vnd.apache.parquet",headers={"Content-Disposition":disposition})
 @router.post("/factor-research",response_model=CatalogSubmission,status_code=202)
 async def create_factor_research(body:FactorResearchCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
     snapshot=await session.scalar(select(FeatureSnapshot).where(FeatureSnapshot.id==body.snapshot_id,FeatureSnapshot.project_id==context.project.id))

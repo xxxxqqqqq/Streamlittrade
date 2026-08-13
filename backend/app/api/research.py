@@ -1,5 +1,6 @@
 """策略、数据集、训练实验和模型仓库API。"""
 
+from urllib.parse import quote
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.app.db.session import get_db_session
 from backend.app.infrastructure.outbox import add_outbox
+from backend.app.infrastructure.object_storage import download_bytes
 from backend.app.models.job import Job
 from backend.app.models.data_catalog import FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation, Strategy
@@ -82,6 +84,17 @@ async def create_dataset(body:DatasetCreate,session:AsyncSession=Depends(get_db_
 @router.get("/datasets",response_model=list[DatasetRead])
 async def list_datasets(session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
     return list((await session.scalars(select(Dataset).where(Dataset.project_id==context.project.id).order_by(Dataset.created_at.desc()))).all())
+
+@router.get("/datasets/{dataset_id}/artifact")
+async def download_dataset_parquet(dataset_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    item=await session.scalar(select(Dataset).where(Dataset.id==dataset_id,Dataset.project_id==context.project.id))
+    if item is None:raise HTTPException(404,"Dataset not found")
+    if item.status!="ready" or not item.artifact_uri:raise HTTPException(409,"ready dataset with an artifact is required")
+    try:payload=await run_in_threadpool(download_bytes,item.artifact_uri)
+    except Exception as exc:raise HTTPException(502,"Unable to download dataset artifact") from exc
+    filename=f"{item.name}-{str(item.id)[:8]}.parquet"
+    disposition=f"attachment; filename=research-dataset-{str(item.id)[:8]}.parquet; filename*=UTF-8''{quote(filename)}"
+    return Response(payload,media_type="application/vnd.apache.parquet",headers={"Content-Disposition":disposition})
 
 @router.post("/experiments",response_model=TaskSubmission,status_code=202)
 async def create_experiment(body:ExperimentCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
@@ -304,7 +317,6 @@ async def download_prediction(
     prediction=await session.scalar(select(PredictionRun).where(PredictionRun.id==prediction_id,PredictionRun.project_id==context.project.id))
     if prediction is None:raise HTTPException(404,"预测任务不存在")
     if prediction.status!="succeeded" or not prediction.artifact_uri:raise HTTPException(409,"预测产物尚未生成")
-    from backend.app.infrastructure.object_storage import download_bytes
     payload=await run_in_threadpool(download_bytes,prediction.artifact_uri)
     return Response(
         content=payload,

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import {computed,onMounted,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
-import {AlertTriangle,ArrowLeft,CheckCircle2,GitBranch,Sparkles} from 'lucide-vue-next'
+import {AlertTriangle,ArrowLeft,CheckCircle2,Download,GitBranch,Sparkles} from 'lucide-vue-next'
 import {api} from '../api'
+import {downloadApiFile} from '../download'
 
 const route=useRoute()
 const router=useRouter()
@@ -11,6 +12,16 @@ const loading=ref(true)
 const loadError=ref('')
 const features=computed(()=>Object.entries(item.value?.profile?.features||{}))
 const warnings=computed(()=>item.value?.profile?.warnings||[])
+const downloading=ref(false)
+const downloadError=ref('')
+
+async function downloadSnapshot(){
+  if(!item.value||downloading.value)return
+  downloading.value=true;downloadError.value=''
+  try{await downloadApiFile(`/data-center/materializations/${item.value.id}/artifact`,`feature-snapshot-${String(item.value.id).slice(0,8)}.parquet`)}
+  catch(exception:any){downloadError.value=exception.message||'下载失败，请稍后重试'}
+  finally{downloading.value=false}
+}
 
 const failure=computed(()=>{
   const raw=String(item.value?.error_message||'').trim()
@@ -49,8 +60,9 @@ onMounted(async()=>{
       <article class="model-hero">
         <div class="feature-icon purple-bg"><Sparkles :size="24"/></div>
         <div><span class="eyebrow dark">FEATURE SNAPSHOT</span><h2>{{item.name}}</h2><p>{{item.row_count??'—'}} 行 · {{features.length}} 个特征</p></div>
-        <i class="status" :class="item.status">{{item.status}}</i>
+        <div class="snapshot-actions"><button class="primary" :disabled="item.status!=='ready'||!item.artifact_uri||downloading" @click="downloadSnapshot"><Download :size="15"/>{{downloading?'正在下载…':'下载 Parquet'}}</button><i class="status" :class="item.status">{{item.status}}</i></div>
       </article>
+      <p v-if="downloadError" class="error-box snapshot-download-error">{{downloadError}}</p>
 
       <article v-if="failure" class="failure-card">
         <div class="failure-icon"><AlertTriangle :size="23"/></div>
@@ -91,5 +103,6 @@ onMounted(async()=>{
 .failure-card{display:grid;grid-template-columns:44px 1fr;gap:13px;margin:16px 0;padding:17px;border:1px solid #f2c4bd;border-radius:13px;background:linear-gradient(135deg,#fff8f6,#fff);box-shadow:0 8px 24px rgba(166,58,43,.07)}
 .failure-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:11px;background:#fde8e4;color:#c64f3d}.failure-copy>span{color:#b85a4b;font-size:9px;font-weight:800;letter-spacing:.12em}.failure-copy h3{margin:4px 0 6px;color:#71382f;font-size:15px}.failure-copy p{margin:0;color:#795d58;font-size:10px;line-height:1.65}.failure-action{margin-top:11px;padding:10px 12px;border-radius:8px;background:#fff0ed;color:#825047;font-size:10px}.failure-action b{margin-right:8px;color:#b94c3c}.failure-copy details{margin-top:10px;color:#8b6b66;font-size:9px}.failure-copy summary{cursor:pointer}.failure-copy pre{max-height:180px;margin:8px 0 0;padding:10px;overflow:auto;border-radius:7px;background:#342521;color:#f5d7d1;font:8px/1.55 Consolas,monospace;white-space:pre-wrap}
 .warning-card{display:flex;align-items:flex-start;gap:10px;margin:16px 0;padding:13px 15px;border:1px solid #bde4d5;border-radius:11px;background:#effaf6;color:#167858}.warning-card>svg{flex:none}.warning-card b{font-size:11px}.warning-card p{margin:4px 0 0;color:#587c70;font-size:9px}.snapshot-empty{min-height:130px}
+.snapshot-actions{display:flex;align-items:center;gap:10px;margin-left:auto}.model-hero>.status{margin-left:0}.snapshot-download-error{margin:0 0 16px}
 @media(max-width:720px){.failure-card{grid-template-columns:1fr}.failure-icon{width:36px;height:36px}}
 </style>
