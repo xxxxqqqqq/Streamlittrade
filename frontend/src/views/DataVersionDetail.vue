@@ -10,12 +10,24 @@ async function downloadDetail(){
   downloading.value=true;downloadError.value=''
   try{
     const response=await api.get(`/data-center/versions/${item.value.id}/download`,{responseType:'blob'})
-    const url=URL.createObjectURL(new Blob([response.data],{type:'text/csv;charset=utf-8'}))
+    const contentType=String(response.headers['content-type']||'text/csv;charset=utf-8')
+    // Axios already returns a Blob in modern browsers.  Reusing it avoids a
+    // browser-specific Blob constructor failure after the API has succeeded.
+    const file=response.data instanceof Blob?response.data:new Blob([response.data],{type:contentType})
+    if(!file.size)throw new Error('下载文件为空，请刷新页面后重试')
+    const url=window.URL.createObjectURL(file)
     const anchor=document.createElement('a')
     anchor.href=url;anchor.download=`data-version-${String(item.value.id).slice(0,8)}.csv`
     document.body.appendChild(anchor);anchor.click();anchor.remove()
-    URL.revokeObjectURL(url)
-  }catch(exception:any){downloadError.value=exception.response?.data?.detail||'下载失败，请稍后重试'}
+    // Revoke after the browser has started the download. Revoking immediately
+    // can cancel it in some Chromium versions.
+    window.setTimeout(()=>window.URL.revokeObjectURL(url),1000)
+  }catch(exception:any){
+    const payload=exception.response?.data
+    if(payload instanceof Blob){
+      try{downloadError.value=JSON.parse(await payload.text()).detail||'下载失败，请稍后重试'}catch{downloadError.value='下载失败，请稍后重试'}
+    }else downloadError.value=payload?.detail||exception.message||'下载失败，请稍后重试'
+  }
   finally{downloading.value=false}
 }
 onMounted(async()=>{try{item.value=(await api.get(`/data-center/versions/${route.params.id}`)).data}finally{loading.value=false}})
