@@ -22,7 +22,7 @@ def _progress(jid,value):
         if job and job.status=="cancel_requested":job.status="canceled";job.completed_at=datetime.now(UTC);s.commit();raise RuntimeError("Task canceled")
         if job:
             job.progress=value
-            job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15)
+            job.lease_expires_at=datetime.now(UTC)+timedelta(hours=1)
             s.commit()
 def _parquet(frame):
     out=io.BytesIO();frame.to_parquet(out,index=False);return out.getvalue()
@@ -109,7 +109,7 @@ def materialize_features(job_id:str):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid);snap=s.get(FeatureSnapshot,UUID(job.payload["snapshot_id"]));version=s.get(DataVersion,snap.data_version_id)
         definitions=list(s.scalars(select(FeatureDefinition).where(FeatureDefinition.id.in_([UUID(x) for x in snap.feature_definition_ids]))).all())
-        job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15);snap.status="running";s.commit()
+        job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(hours=1);snap.status="running";s.commit()
     try:
         frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri))).sort_values(["symbol","date"])
         non_finite_replacements={}
