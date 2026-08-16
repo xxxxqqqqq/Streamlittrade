@@ -11,7 +11,6 @@ class SourceCreate(BaseModel):
     name: str = Field(min_length=2,max_length=120); slug: str = Field(pattern=r"^[a-z0-9_-]+$")
     provider: Literal["demo","akshare","baostock"]; asset_type: Literal["equity_daily"]="equity_daily"
     configuration: dict[str,Any]=Field(default_factory=dict)
-    _formal_name=field_validator("name")(reject_corrupted_display_name)
 class SourceRead(SourceCreate):
     model_config=ConfigDict(from_attributes=True); id:UUID;status:str;created_at:datetime
 class DynamicUniversePolicy(BaseModel):
@@ -45,7 +44,6 @@ class FeatureCreate(BaseModel):
         "volume_volatility","volume_momentum"
     ]
     parameters:dict[str,Any]=Field(default_factory=dict);description:str=""
-    _formal_name=field_validator("name")(reject_corrupted_display_name)
     @model_validator(mode="after")
     def validate_parameters(self):
         from backend.app.services.factors import validate_factor_parameters
