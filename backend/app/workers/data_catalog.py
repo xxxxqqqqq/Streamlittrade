@@ -116,24 +116,32 @@ def materialize_features(job_id:str):
         computed_columns={}
         for index,definition in enumerate(definitions):
             column,replaced=_compute_feature_column_with_diagnostics(frame, definition)
-            computed_columns[definition.slug]=column
+            # Factor snapshots can contain hundreds of thousands of rows and
+            # many columns.  Float32 is ample for model inputs and halves the
+            # peak resident memory while the immutable snapshot is assembled.
+            computed_columns[definition.slug]=column.astype("float32")
             non_finite_replacements[definition.slug]=replaced
             if (index + 1) % 5 == 0 or index + 1 == len(definitions):
                 _progress(jid,10+int(65*(index+1)/len(definitions)))
-        frame=pd.concat([frame,pd.DataFrame(computed_columns,index=frame.index)],axis=1)
         feature_columns=[d.slug for d in definitions]
         universe_columns=[column for column in ("universe_member","universe_rank") if column in frame.columns]
+        output_frame=pd.DataFrame(computed_columns,index=frame.index,copy=False)
+        for column in reversed(["date","symbol",*universe_columns]):
+            output_frame.insert(0,column,frame[column].to_numpy(copy=False))
+        del computed_columns
         profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date()),"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})}
         for col in feature_columns:
-            values=frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":_finite(values.mean()),"std":_finite(values.std()),"min":_finite(values.min()),"max":_finite(values.max()),"non_finite_replaced":non_finite_replacements[col]}
+            values=output_frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":_finite(values.mean()),"std":_finite(values.std()),"min":_finite(values.min()),"max":_finite(values.max()),"non_finite_replaced":non_finite_replacements[col]}
         profile["warnings"]=[
             {"code":"non_finite_replaced","feature":slug,"count":count,"message":"非有限因子值已转为空值"}
             for slug,count in non_finite_replacements.items() if count
         ]
-        payload=_parquet(frame[["date","symbol",*universe_columns,*feature_columns]]);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
+        del frame
+        payload=_parquet(output_frame);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
         definitions_snapshot=[{"id":str(d.id),"slug":d.slug,"version":d.version,"implementation":d.implementation,"parameters":d.parameters} for d in definitions]
         with SyncSessionFactory() as s:
-            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=len(frame);item.profile=profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":"feature_registry_v2","dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":len(frame),"features":feature_columns,"content_sha256":digest};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
+            row_count=len(output_frame)
+            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=row_count;item.profile=profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":"feature_registry_v2","dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":row_count,"features":feature_columns,"content_sha256":digest};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(FeatureSnapshot,snap.id)]);raise
 
