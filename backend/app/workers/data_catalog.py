@@ -173,20 +173,27 @@ def _daily_correlation(frame,feature,method):
 
 
 def _quantile_analysis(frame,feature,quantiles):
-    spreads=[];top_sets=[];previous=None;turnovers=[]
-    for date,group in frame[["date","symbol",feature,"forward_return"]].dropna().groupby("date"):
-        if len(group)<max(3,quantiles) or group[feature].nunique()<2:continue
-        effective=min(quantiles,len(group),group[feature].nunique())
-        try:ranks=group[feature].rank(method="first");buckets=pd.qcut(ranks,effective,labels=False,duplicates="drop")
-        except ValueError:continue
-        low=group.loc[buckets==buckets.min(),"forward_return"].mean()
-        high=group.loc[buckets==buckets.max(),"forward_return"].mean()
-        if pd.notna(low) and pd.notna(high):spreads.append(float(high-low))
-        current=set(group.loc[buckets==buckets.max(),"symbol"].astype(str))
+    values=frame[["date","symbol",feature,"forward_return"]].dropna().copy()
+    grouped=values.groupby("date",sort=True)
+    values["_n"]=grouped[feature].transform("size")
+    values["_unique"]=grouped[feature].transform("nunique")
+    values=values[(values._n>=max(3,quantiles))&(values._unique>=2)].copy()
+    if values.empty:return {"observations":0,"mean_spread":None,"annualized_spread":None,"spread_win_rate":None,"cumulative_spread":None,"turnover":None}
+    values["_effective"]=np.minimum(quantiles,np.minimum(values._n,values._unique)).astype(int)
+    values["_rank"]=values.groupby("date",sort=False)[feature].rank(method="first")
+    values["_bucket"]=(
+        np.ceil((values._rank-1)*values._effective/(values._n-1))-1
+    ).clip(lower=0).astype(int)
+    means=values.groupby(["date","_bucket"],sort=True)["forward_return"].mean()
+    low=means.groupby(level=0).first();high=means.groupby(level=0).last()
+    series=(high-low).dropna().astype(float)
+    top=values[values._bucket==values._effective-1]
+    previous=None;turnovers=[]
+    for _,group in top.groupby("date",sort=True):
+        current=set(group.symbol.astype(str))
         if previous:
             turnovers.append(1-len(previous&current)/max(1,len(previous)))
-        previous=current;top_sets.append((str(pd.Timestamp(date).date()),sorted(current)))
-    series=pd.Series(spreads,dtype=float)
+        previous=current
     return {
         "observations":int(len(series)),
         "mean_spread":_finite(series.mean()),
