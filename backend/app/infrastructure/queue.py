@@ -11,7 +11,10 @@ from backend.app.core.config import get_settings
 
 QUEUE_NAME = "quant-backtests"
 redis_sync = Redis.from_url(get_settings().redis_url)
-backtest_queue = Queue(QUEUE_NAME, connection=redis_sync, default_timeout=900)
+# Large, point-in-time feature snapshots can legitimately exceed 15 minutes
+# on the production host.  Progress heartbeats still protect stale jobs, while
+# this timeout prevents RQ from killing healthy research work mid-computation.
+backtest_queue = Queue(QUEUE_NAME, connection=redis_sync, default_timeout=3600)
 
 
 def enqueue_backtest(job_id: UUID) -> None:
