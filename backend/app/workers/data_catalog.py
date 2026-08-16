@@ -155,12 +155,21 @@ def _finite(value):
 
 
 def _daily_correlation(frame,feature,method):
-    values=[]
-    for _,group in frame[[feature,"forward_return","date"]].dropna().groupby("date"):
-        if len(group)>=3 and group[feature].nunique()>1 and group["forward_return"].nunique()>1:
-            value=group[feature].corr(group["forward_return"],method=method)
-            if pd.notna(value):values.append(float(value))
-    return pd.Series(values,dtype=float)
+    values=frame[[feature,"forward_return","date"]].dropna().copy()
+    if values.empty:return pd.Series(dtype=float)
+    if method=="spearman":
+        values[[feature,"forward_return"]]=values.groupby("date")[[feature,"forward_return"]].rank(method="average")
+    values["_x2"]=values[feature]*values[feature]
+    values["_y2"]=values["forward_return"]*values["forward_return"]
+    values["_xy"]=values[feature]*values["forward_return"]
+    daily=values.groupby("date",sort=False).agg(
+        n=(feature,"size"),sx=(feature,"sum"),sy=("forward_return","sum"),
+        sxx=("_x2","sum"),syy=("_y2","sum"),sxy=("_xy","sum"),
+    )
+    numerator=daily.n*daily.sxy-daily.sx*daily.sy
+    denominator=np.sqrt((daily.n*daily.sxx-daily.sx**2)*(daily.n*daily.syy-daily.sy**2))
+    result=(numerator/denominator).where((daily.n>=3)&(denominator>0)).dropna()
+    return result.astype(float).reset_index(drop=True)
 
 
 def _quantile_analysis(frame,feature,quantiles):
