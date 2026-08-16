@@ -13,6 +13,13 @@ FEATURES = [
 ]
 
 
+def cross_sectional_rank_features(frame: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
+    """Map each date's stock cross-section to robust [-1, 1] percentile ranks."""
+
+    ranked = frame.groupby("date", sort=False)[feature_columns].rank(method="average", pct=True)
+    return ranked.mul(2.0).sub(1.0).astype("float32")
+
+
 @dataclass(frozen=True)
 class TimeFold:
     """One expanding-window fold separated by purge and embargo date gaps."""

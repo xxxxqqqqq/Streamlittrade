@@ -43,9 +43,11 @@ class FactorTemplate:
     family: str
     description: str
     default_window: int
+    source: str = "QuantForge"
+    reference_url: str = ""
 
 
-FACTOR_LIBRARY = (
+BASE_FACTOR_TEMPLATES = (
     FactorTemplate("return", "区间收益率", "momentum", "收盘价过去N日收益率", 20),
     FactorTemplate("log_return", "对数收益率", "momentum", "收盘价过去N日对数收益率", 20),
     FactorTemplate("moving_average_bias", "均线偏离", "trend", "收盘价相对N日均线的偏离", 20),
@@ -67,9 +69,82 @@ FACTOR_LIBRARY = (
     FactorTemplate("liquidity_trend", "流动性趋势", "liquidity", "近期成交额相对前期的改善程度", 20),
     FactorTemplate("turnover_stability", "成交稳定性", "liquidity", "成交额变异系数的相反数", 20),
     FactorTemplate("volume_price_confirmation", "量价确认", "behavioral", "收益方向与异常成交量的共振", 20),
+    FactorTemplate("intraday_return", "日内收益", "candlestick", "收盘价相对开盘价的日内变化", 1, "Qlib Alpha158", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("close_location", "收盘位置", "candlestick", "收盘价在当日高低价区间的位置", 1, "Qlib Alpha158", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("upper_shadow", "上影线比例", "candlestick", "最高价超过开盘价与收盘价较高者的比例", 1, "Qlib Alpha158", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("lower_shadow", "下影线比例", "candlestick", "开盘价与收盘价较低者超过最低价的比例", 1, "Qlib Alpha158", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("price_efficiency", "价格效率", "quality", "区间净变化相对逐日绝对变化之和", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("return_kurtosis", "收益峰度", "risk", "日收益率的滚动峰度", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("up_day_ratio", "上涨日占比", "behavioral", "窗口内上涨交易日比例", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("max_daily_return", "最大单日收益", "risk", "窗口内最大单日收益率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("min_daily_return", "最小单日收益", "risk", "窗口内最小单日收益率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("volume_volatility", "成交量波动", "liquidity", "成交量变化率的滚动波动率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("volume_momentum", "成交量动量", "liquidity", "成交量相对窗口前的变化率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
 )
 
-BUILTIN_IMPLEMENTATIONS = frozenset(item.implementation for item in FACTOR_LIBRARY)
+ROLLING_WINDOWS = (
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24, 25, 30,
+    35, 40, 45, 50, 55, 60, 63, 75, 80, 90, 100, 120, 126, 150, 180, 200,
+    240, 252, 360,
+)
+POINT_IN_TIME_IMPLEMENTATIONS = frozenset(
+    {"amplitude", "overnight_gap", "intraday_return", "close_location", "upper_shadow", "lower_shadow"}
+)
+
+
+def _factor_variant_payload() -> list[dict[str, Any]]:
+    """Build exactly 1,000 executable, categorized and uniquely named candidates.
+
+    A candidate is a reviewed implementation plus a bounded trailing window;
+    this keeps the catalog broad without introducing 1,000 copies of arbitrary
+    Python.  The catalog is discovery metadata only: a research snapshot still
+    records the smaller, explicitly registered subset used by an experiment.
+    """
+
+    payload: list[dict[str, Any]] = []
+    for item in BASE_FACTOR_TEMPLATES:
+        if item.implementation == "momentum_acceleration":
+            continue
+        windows = (1,) if item.implementation in POINT_IN_TIME_IMPLEMENTATIONS else ROLLING_WINDOWS
+        for window in windows:
+            payload.append(
+                {
+                    "slug": item.implementation if window == 1 else f"{item.implementation}_{window}d",
+                    "implementation": item.implementation,
+                    "name": item.name if window == 1 else f"{window}日{item.name}",
+                    "family": item.family,
+                    "description": item.description,
+                    "default_window": window,
+                    "parameters": {"window": window},
+                    "source": item.source,
+                    "reference_url": item.reference_url,
+                }
+            )
+    acceleration = next(item for item in BASE_FACTOR_TEMPLATES if item.implementation == "momentum_acceleration")
+    for short_window in (2, 3, 5, 8, 10, 15, 20, 30):
+        for long_window in (10, 15, 20, 30, 40, 60, 90, 120, 180, 252):
+            if short_window >= long_window:
+                continue
+            payload.append(
+                {
+                    "slug": f"momentum_acceleration_{short_window}d_{long_window}d",
+                    "implementation": acceleration.implementation,
+                    "name": f"{short_window}/{long_window}日{acceleration.name}",
+                    "family": acceleration.family,
+                    "description": acceleration.description,
+                    "default_window": long_window,
+                    "parameters": {"short_window": short_window, "long_window": long_window},
+                    "source": acceleration.source,
+                    "reference_url": acceleration.reference_url,
+                }
+            )
+            if len(payload) == 1_000:
+                return payload
+    raise RuntimeError(f"Factor catalog generation produced only {len(payload)} candidates")
+
+
+FACTOR_LIBRARY = tuple(_factor_variant_payload())
+BUILTIN_IMPLEMENTATIONS = frozenset(item.implementation for item in BASE_FACTOR_TEMPLATES)
 ALLOWED_IMPLEMENTATIONS = BUILTIN_IMPLEMENTATIONS | {"expression"}
 
 
@@ -87,16 +162,7 @@ def _ensure_numeric_libraries() -> None:
 def factor_library_payload() -> list[dict[str, Any]]:
     """Return serializable metadata for the frontend factor library."""
 
-    return [
-        {
-            "implementation": item.implementation,
-            "name": item.name,
-            "family": item.family,
-            "description": item.description,
-            "default_window": item.default_window,
-        }
-        for item in FACTOR_LIBRARY
-    ]
+    return [dict(item) for item in FACTOR_LIBRARY]
 
 
 def _positive_integer(value: Any, name: str, *, maximum: int = 500) -> int:
@@ -355,4 +421,32 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
         volume_ratio = volume / volume.rolling(window).mean().replace(0, np.nan)
         abnormal_volume = np.log(volume_ratio.where(volume_ratio > 0))
         return close.pct_change(window) * abnormal_volume
+    if implementation == "intraday_return":
+        return close / group["open"].astype(float).replace(0, np.nan) - 1
+    if implementation == "close_location":
+        high, low = group["high"].astype(float), group["low"].astype(float)
+        return (close - low) / (high - low).replace(0, np.nan)
+    if implementation == "upper_shadow":
+        open_price, high = group["open"].astype(float), group["high"].astype(float)
+        return (high - np.maximum(open_price, close)) / open_price.replace(0, np.nan)
+    if implementation == "lower_shadow":
+        open_price, low = group["open"].astype(float), group["low"].astype(float)
+        return (np.minimum(open_price, close) - low) / open_price.replace(0, np.nan)
+    if implementation == "price_efficiency":
+        path_length = close.diff().abs().rolling(window).sum()
+        return close.diff(window).abs() / path_length.replace(0, np.nan)
+    if implementation == "return_kurtosis":
+        return returns.rolling(window).kurt()
+    if implementation == "up_day_ratio":
+        return returns.gt(0).astype(float).rolling(window).mean()
+    if implementation == "max_daily_return":
+        return returns.rolling(window).max()
+    if implementation == "min_daily_return":
+        return returns.rolling(window).min()
+    if implementation == "volume_volatility":
+        volume_change = group["volume"].astype(float).pct_change().replace([np.inf, -np.inf], np.nan)
+        return volume_change.rolling(window).std()
+    if implementation == "volume_momentum":
+        volume = group["volume"].astype(float)
+        return volume / volume.shift(window).replace(0, np.nan) - 1
     raise ValueError(f"Unsupported factor implementation: {implementation}")

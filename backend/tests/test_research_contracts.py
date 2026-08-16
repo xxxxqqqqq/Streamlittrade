@@ -68,11 +68,16 @@ class ResearchContractTests(unittest.TestCase):
         forest = ExperimentCreate(
             name="forest", dataset_id=uuid4(), algorithm="random_forest"
         )
+        extra_trees = ExperimentCreate(
+            name="extra trees", dataset_id=uuid4(), algorithm="extra_trees"
+        )
         logistic = ExperimentCreate(
             name="logistic", dataset_id=uuid4(), algorithm="logistic_regression"
         )
 
         self.assertEqual(forest.parameters["n_estimators"], 300)
+        self.assertEqual(extra_trees.parameters["n_estimators"], 400)
+        self.assertEqual(extra_trees.parameters["max_features"], 0.7)
         self.assertEqual(logistic.parameters["C"], 1.0)
         with self.assertRaises(ValidationError):
             ExperimentCreate(

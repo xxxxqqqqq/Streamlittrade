@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ScheduleCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
-    algorithm: Literal["hist_gradient_boosting", "random_forest", "logistic_regression"]
+    algorithm: Literal["hist_gradient_boosting", "random_forest", "extra_trees", "logistic_regression"]
     feature_snapshot_id: UUID
     interval_minutes: int = Field(default=1440, ge=5, le=10080)
     enabled: bool = True
@@ -37,7 +37,7 @@ class ScheduleRead(BaseModel):
 class PaperAutomationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     account_id: UUID
-    algorithm: Literal["hist_gradient_boosting", "random_forest", "logistic_regression"]
+    algorithm: Literal["hist_gradient_boosting", "random_forest", "extra_trees", "logistic_regression"]
     interval_minutes: int = Field(default=1440, ge=30, le=10080)
     top_n: int = Field(default=5, ge=1, le=50)
     probability_threshold: float = Field(default=0.55, ge=0.5, le=0.99)

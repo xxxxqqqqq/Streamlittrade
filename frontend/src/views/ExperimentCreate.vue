@@ -36,7 +36,7 @@ async function submit(){
   try{
     const parameters=form.value.algorithm==='hist_gradient_boosting'
       ? {max_iter:Number(form.value.max_iter),max_depth:Number(form.value.max_depth),learning_rate:Number(form.value.learning_rate)}
-      : form.value.algorithm==='random_forest'
+      : ['random_forest','extra_trees'].includes(form.value.algorithm)
         ? {n_estimators:Number(form.value.n_estimators),max_depth:Number(form.value.max_depth),min_samples_leaf:Number(form.value.min_samples_leaf)}
         : {C:Number(form.value.C),max_iter:Number(form.value.max_iter)}
     const response=await api.post('/experiments',{
@@ -61,13 +61,13 @@ async function submit(){
         <div class="field full"><label>实验名称</label><input v-model="form.name" required minlength="2"/></div>
         <div class="field full"><label>已就绪数据集</label><select v-model="form.dataset_id" required><option disabled value="">请选择数据集</option><option v-for="item in readyDatasets" :key="item.id" :value="item.id">{{item.name}} · {{item.row_count}} 行</option></select></div>
         <div class="form-grid">
-          <div class="field full"><label>算法</label><select v-model="form.algorithm"><option value="hist_gradient_boosting">Histogram Gradient Boosting</option><option value="random_forest">Random Forest</option><option value="logistic_regression">Logistic Regression</option></select></div>
+          <div class="field full"><label>算法</label><select v-model="form.algorithm"><option value="hist_gradient_boosting">Histogram Gradient Boosting</option><option value="extra_trees">Extra Trees（横截面增强）</option><option value="random_forest">Random Forest</option><option value="logistic_regression">Logistic Regression</option></select></div>
           <template v-if="form.algorithm==='hist_gradient_boosting'">
             <div class="field"><label>最大迭代次数</label><input v-model.number="form.max_iter" type="number" min="10"/></div>
             <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
             <div class="field"><label>学习率</label><input v-model.number="form.learning_rate" type="number" min="0.001" step="0.001"/></div>
           </template>
-          <template v-else-if="form.algorithm==='random_forest'">
+          <template v-else-if="['random_forest','extra_trees'].includes(form.algorithm)">
             <div class="field"><label>树数量</label><input v-model.number="form.n_estimators" type="number" min="10"/></div>
             <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
             <div class="field"><label>叶节点最小样本</label><input v-model.number="form.min_samples_leaf" type="number" min="1"/></div>

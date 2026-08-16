@@ -17,6 +17,8 @@ const error=ref('')
 const notice=ref('')
 const busy=ref(false)
 const factorSearch=ref('')
+const librarySearch=ref('')
+const selectedLibraryFamily=ref('all')
 const isAdmin=computed(()=>user.value?.role==='admin')
 
 const sourceForm=ref({
@@ -100,6 +102,27 @@ const selectedFactorIds=computed(()=>new Set(materialForm.value.feature_definiti
 const selectedCurrentFactors=computed(()=>
   currentFactors.value.filter(factor=>selectedFactorIds.value.has(factor.id))
 )
+const factorFamilyLabels:Record<string,string>={
+  all:'全部分类',momentum:'动量',trend:'趋势',risk:'风险',liquidity:'流动性',
+  technical:'技术指标',behavioral:'行为',quality:'质量',candlestick:'K线形态',
+}
+const libraryFamilies=computed(()=>[
+  'all',...Array.from(new Set(factorLibrary.value.map(item=>String(item.family)))).sort(),
+])
+const filteredFactorLibrary=computed(()=>{
+  const keyword=librarySearch.value.trim().toLowerCase()
+  return factorLibrary.value.filter(item=>
+    (selectedLibraryFamily.value==='all'||item.family===selectedLibraryFamily.value)
+    &&(!keyword||[item.name,item.slug,item.description,item.source]
+      .some(value=>String(value||'').toLowerCase().includes(keyword)))
+  )
+})
+const visibleFactorLibrary=computed(()=>filteredFactorLibrary.value.slice(0,80))
+const factorImplementations=computed(()=>{
+  const unique=new Map<string,any>()
+  for(const item of factorLibrary.value)if(!unique.has(item.implementation))unique.set(item.implementation,item)
+  return [...unique.values()]
+})
 const allVisibleFactorsSelected=computed(()=>
   filteredFactors.value.length>0
   &&filteredFactors.value.every(factor=>selectedFactorIds.value.has(factor.id))
@@ -296,14 +319,17 @@ async function materialize(){
 }
 
 function applyFactorTemplate(template:any){
-  const window=Number(template.default_window||20)
+  const parameters=template.parameters||{window:template.default_window||20}
+  const window=Number(parameters.window||template.default_window||20)
   featureForm.value={
     ...featureForm.value,
-    name:`${window}日${template.name}`,
-    slug:`${template.implementation}_${window}d`,
+    name:template.name,
+    slug:template.slug,
     family:template.family,
     implementation:template.implementation,
     window,
+    short_window:Number(parameters.short_window||5),
+    long_window:Number(parameters.long_window||20),
     description:template.description,
   }
 }
@@ -481,31 +507,40 @@ function clearSelectedFactors(){
           </div>
           <template v-if="isAdmin">
             <div class="factor-mode-title">
-              <div><b>内置因子库</b><span>{{factorLibrary.length}}种经过后端实现的计算方式</span></div>
+              <div><b>内置因子库</b><span>{{factorLibrary.length}}个可执行候选因子，按经济含义分类</span></div>
               <button type="button" :class="{selected:featureForm.implementation==='expression'}" @click="useExpressionExample(expressionExamples[0])">
                 <Sparkles :size="13"/>自由公式
               </button>
             </div>
+            <div class="factor-library-toolbar">
+              <label class="factor-search"><Search :size="14"/><input v-model="librarySearch" placeholder="搜索名称、标识、说明或来源"/></label>
+              <select v-model="selectedLibraryFamily">
+                <option v-for="family in libraryFamilies" :key="family" :value="family">{{factorFamilyLabels[family]||family}}</option>
+              </select>
+              <span>匹配 {{filteredFactorLibrary.length}} 个</span>
+            </div>
             <div class="factor-templates">
               <button
-                v-for="template in factorLibrary"
-                :key="template.implementation"
+                v-for="template in visibleFactorLibrary"
+                :key="template.slug"
                 type="button"
-                :class="{selected:featureForm.implementation===template.implementation}"
+                :class="{selected:featureForm.slug===template.slug}"
                 @click="applyFactorTemplate(template)"
+                :title="`${template.description} · ${template.source}`"
               >
                 <b>{{template.name}}</b>
-                <small>{{template.family}}</small>
+                <small>{{factorFamilyLabels[template.family]||template.family}} · {{template.slug}}</small>
               </button>
             </div>
+            <p v-if="filteredFactorLibrary.length>visibleFactorLibrary.length" class="factor-library-tip">为保持页面流畅，当前显示前 {{visibleFactorLibrary.length}} 个；可继续缩小分类或输入更精确的关键词。</p>
             <div class="compact-grid factor-form">
               <div class="field"><label>因子名称</label><input v-model="featureForm.name"/></div>
               <div class="field"><label>因子标识</label><input v-model="featureForm.slug"/></div>
               <div class="field">
                 <label>计算实现</label>
                 <select v-model="featureForm.implementation">
-                  <option v-for="template in factorLibrary" :key="template.implementation" :value="template.implementation">
-                    {{template.name}}
+                  <option v-for="template in factorImplementations" :key="template.implementation" :value="template.implementation">
+                    {{template.name}}（{{factorFamilyLabels[template.family]||template.family}}）
                   </option>
                   <option value="expression">安全自由表达式</option>
                 </select>
@@ -746,6 +781,7 @@ function clearSelectedFactors(){
 .factor-templates button{min-width:0;border:1px solid #dbe3ec;border-radius:8px;background:#fff;padding:8px;color:#627086;text-align:left}
 .factor-templates button b,.factor-templates button small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.factor-templates button b{font-size:9px}.factor-templates button small{margin-top:3px;color:#97a2b1;font-size:8px;text-transform:uppercase}
 .factor-templates button:hover,.factor-templates button.selected{border-color:#6aa2e7;background:#edf5ff;color:#1768d7}
+.factor-library-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 150px auto;align-items:center;gap:8px;margin:0 0 9px}.factor-library-toolbar select{height:34px;border:1px solid #dbe3ec;border-radius:8px;background:#fff;padding:0 9px;color:#44546a}.factor-library-toolbar>span,.factor-library-tip{color:#8290a3;font-size:9px}.factor-library-tip{margin:-6px 0 12px}
 .factor-form{grid-template-columns:1.1fr 1.1fr 1fr .65fr auto}
 .expression-builder{margin:13px 0;padding:12px;border:1px solid #dce6f2;border-radius:9px;background:#f8fbff}
 .expression-builder-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:9px}.expression-builder-head b,.expression-builder-head span{display:block}.expression-builder-head b{font-size:11px}.expression-builder-head span{margin-top:3px;color:#8290a2;font-size:9px}

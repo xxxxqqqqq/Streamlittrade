@@ -52,10 +52,32 @@ class DataCatalogContractTests(unittest.TestCase):
 
     def test_factor_library_exposes_multiple_families(self):
         library = factor_library_payload()
-        self.assertGreaterEqual(len(library), 12)
+        self.assertEqual(len(library), 1000)
+        self.assertEqual(len({item["slug"] for item in library}), 1000)
         self.assertIn("momentum", {item["family"] for item in library})
         self.assertIn("liquidity", {item["family"] for item in library})
         self.assertIn("risk", {item["family"] for item in library})
+        self.assertIn("candlestick", {item["family"] for item in library})
+
+    def test_sync_accepts_a_two_hundred_symbol_research_universe(self):
+        request = SyncCreate(
+            name="沪深300历史成分200股研究行情",
+            source_id="00000000-0000-0000-0000-000000000001",
+            symbols=[f"{index:06d}" for index in range(200)],
+            start_date=date(2020, 1, 1),
+            end_date=date(2024, 1, 1),
+        )
+        self.assertEqual(len(request.symbols), 200)
+
+    def test_immutable_asset_name_rejects_encoding_loss_markers(self):
+        with self.assertRaises(ValidationError):
+            SyncCreate(
+                name="20日????研究数据",
+                source_id="00000000-0000-0000-0000-000000000001",
+                symbols=["600000"],
+                start_date=date(2020, 1, 1),
+                end_date=date(2024, 1, 1),
+            )
 
     def test_expression_rejects_arbitrary_python(self):
         with self.assertRaises(ValidationError):
@@ -91,6 +113,23 @@ class DataCatalogContractTests(unittest.TestCase):
         )
         result = compute_factor(frame, "price_position", {"window": 3})
         self.assertAlmostEqual(result.iloc[-1], (13 - 9) / (14 - 9))
+
+    def test_advanced_factor_variants_are_past_only(self):
+        length = 50
+        frame = pd.DataFrame({
+            "open": np.linspace(10, 15, length), "high": np.linspace(11, 16, length),
+            "low": np.linspace(9, 14, length), "close": np.linspace(10.2, 15.2, length),
+            "volume": np.linspace(1000, 3000, length),
+        })
+        revised = frame.copy()
+        revised.loc[length - 1, ["close", "volume"]] = [99, 999999]
+        for implementation in (
+            "price_efficiency", "return_kurtosis", "up_day_ratio", "max_daily_return",
+            "min_daily_return", "volume_volatility", "volume_momentum", "upper_shadow",
+        ):
+            baseline = compute_factor(frame, implementation, {"window": 10})
+            changed = compute_factor(revised, implementation, {"window": 10})
+            pd.testing.assert_series_equal(baseline.iloc[:-1], changed.iloc[:-1])
 
     def test_materialized_factor_is_one_column_for_multiple_symbols(self):
         """A multi-symbol return factor must remain assignable to one column."""

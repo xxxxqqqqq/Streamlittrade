@@ -3,7 +3,8 @@
 from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from backend.app.schemas.names import reject_corrupted_display_name
 
 
 class DatasetCreate(BaseModel):
@@ -11,13 +12,14 @@ class DatasetCreate(BaseModel):
     data_source: Literal["feature_snapshot", "demo", "baostock"] = "demo"
     feature_snapshot_id: UUID | None = None
     factor_research_id: UUID | None = None
-    symbols: list[str] = Field(default=["DEMO"], min_length=1, max_length=100)
+    symbols: list[str] = Field(default=["DEMO"], min_length=1, max_length=500)
     start_date: date = date(2018, 1, 1)
     end_date: date = date(2024, 12, 31)
     horizon: int = Field(default=5, ge=1, le=60)
     training_fraction: float = Field(default=0.55, ge=0.3, le=0.8)
     tuning_fraction: float = Field(default=0.25, ge=0.1, le=0.4)
     tuning_folds: int = Field(default=3, ge=2, le=6)
+    _formal_name=field_validator("name")(reject_corrupted_display_name)
     @model_validator(mode="after")
     def validate_dates(self):
         if self.start_date >= self.end_date: raise ValueError("开始日期必须早于结束日期")
@@ -34,14 +36,16 @@ class DatasetCreate(BaseModel):
 class ExperimentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     dataset_id: UUID
-    algorithm: Literal["hist_gradient_boosting", "random_forest", "logistic_regression"] = "hist_gradient_boosting"
+    algorithm: Literal["hist_gradient_boosting", "random_forest", "extra_trees", "logistic_regression"] = "hist_gradient_boosting"
     parameters: dict[str, int | float] = Field(default_factory=dict)
+    _formal_name=field_validator("name")(reject_corrupted_display_name)
 
     @model_validator(mode="after")
     def validate_algorithm_parameters(self):
         defaults = {
             "hist_gradient_boosting": {"max_iter": 150, "max_depth": 5, "learning_rate": 0.05},
             "random_forest": {"n_estimators": 300, "max_depth": 8, "min_samples_leaf": 5},
+            "extra_trees": {"n_estimators": 400, "max_depth": 10, "min_samples_leaf": 5, "max_features": 0.7},
             "logistic_regression": {"C": 1.0, "max_iter": 500},
         }
         allowed = set(defaults[self.algorithm])

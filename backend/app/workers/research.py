@@ -9,8 +9,7 @@ from uuid import UUID, uuid4
 import joblib
 import pandas as pd
 import sklearn
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, roc_auc_score
@@ -23,7 +22,7 @@ from backend.app.models.job import Job
 from backend.app.models.data_catalog import DataVersion, FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation
 from quant_core import fetch_stock_data, generate_demo_stock_data
-from quant_core.ml import FEATURES, build_training_frame, economic_metrics, three_way_research_split
+from quant_core.ml import FEATURES, build_training_frame, cross_sectional_rank_features, economic_metrics, three_way_research_split
 from quant_core.validation import fit_time_ordered_sigmoid, probability_diagnostics
 from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
 
@@ -38,12 +37,26 @@ def _build_estimator(algorithm: str, parameters: dict):
         return HistGradientBoostingClassifier(random_state=42, **parameters)
     if algorithm == "random_forest":
         return RandomForestClassifier(random_state=42, n_jobs=-1, **parameters)
+    if algorithm == "extra_trees":
+        return ExtraTreesClassifier(
+            random_state=42, n_jobs=-1, class_weight="balanced", **parameters
+        )
     if algorithm == "logistic_regression":
         return make_pipeline(
             StandardScaler(),
             LogisticRegression(random_state=42, **parameters),
         )
     raise ValueError(f"Unsupported training algorithm: {algorithm}")
+
+
+def _prepare_model_features(
+    frame: pd.DataFrame, feature_columns: list[str], preprocessing: str | None
+) -> pd.DataFrame:
+    """Apply versioned preprocessing while keeping legacy model artifacts valid."""
+
+    if preprocessing == "daily_cross_sectional_percentile_rank_v1":
+        return cross_sectional_rank_features(frame, feature_columns)
+    return frame[feature_columns]
 
 
 def _check_cancel(job_id: UUID) -> None:
@@ -257,12 +270,14 @@ def train_experiment(job_id: str) -> dict:
         for fold in folds:
             _check_cancel(jid)
             train, test = frame.iloc[fold.train_index], frame.iloc[fold.test_index]
+            train_features = cross_sectional_rank_features(train, feature_columns)
+            test_features = cross_sectional_rank_features(test, feature_columns)
             model = fit_time_ordered_sigmoid(
                 lambda: _build_estimator(algorithm, params),
-                train[feature_columns], train["label"], train["date"], purge_days=horizon,
+                train_features, train["label"], train["date"], purge_days=horizon,
             )
-            pred, prob = model.predict(test[feature_columns]), model.predict_proba(test[feature_columns])[:, 1]
-            raw_prob = model.raw_predict_proba(test[feature_columns])[:, 1]
+            pred, prob = model.predict(test_features), model.predict_proba(test_features)[:, 1]
+            raw_prob = model.raw_predict_proba(test_features)[:, 1]
             fold_calibration = probability_diagnostics(test.label, prob, raw_probability=raw_prob)
             fold_metrics.append({
                 "fold": fold.fold, "train_start": fold.train_start, "train_end": fold.train_end,
@@ -299,7 +314,7 @@ def train_experiment(job_id: str) -> dict:
         }
         explanation=permutation_importance(
             model,
-            test[feature_columns],
+            test_features,
             test["label"],
             n_repeats=5,
             random_state=42,
@@ -318,9 +333,10 @@ def train_experiment(job_id: str) -> dict:
             )
         ]
         development = frame.iloc[split.development_index]
+        development_features = cross_sectional_rank_features(development, feature_columns)
         final_model = fit_time_ordered_sigmoid(
             lambda: _build_estimator(algorithm, params),
-            development[feature_columns], development["label"], development["date"], purge_days=horizon,
+            development_features, development["label"], development["date"], purge_days=horizon,
         )
         reproducibility = {
             "schema_version": 1, "random_seed": 42, "dataset": dataset_snapshot,
@@ -328,11 +344,12 @@ def train_experiment(job_id: str) -> dict:
             "python_version": platform.python_version(), "sklearn_version": sklearn.__version__,
             "trained_at": datetime.now(UTC).isoformat(),
             "fit_scope": "training_plus_tuning_only",
+            "feature_preprocessing": "daily_cross_sectional_percentile_rank_v1",
             "fit_end": split.tuning_end,
             "sealed_start": split.sealed_start,
         }
         output = io.BytesIO()
-        joblib.dump({"model": final_model, "features": feature_columns, "metrics": metrics, "reproducibility": reproducibility}, output)
+        joblib.dump({"model": final_model, "features": feature_columns, "preprocessing": "daily_cross_sectional_percentile_rank_v1", "metrics": metrics, "reproducibility": reproducibility}, output)
         model_payload = output.getvalue()
         reproducibility["model_sha256"] = hashlib.sha256(model_payload).hexdigest()
         model_id = uuid4()
@@ -397,12 +414,13 @@ def evaluate_sealed_model(job_id: str) -> dict:
         )
         sealed = frame.iloc[split.sealed_index].copy()
         estimator = bundle["model"]
-        sealed["prediction"] = estimator.predict(sealed[features])
+        sealed_features = _prepare_model_features(sealed, features, bundle.get("preprocessing"))
+        sealed["prediction"] = estimator.predict(sealed_features)
         sealed["raw_probability"] = (
-            estimator.raw_predict_proba(sealed[features])[:, 1]
-            if hasattr(estimator, "raw_predict_proba") else estimator.predict_proba(sealed[features])[:, 1]
+            estimator.raw_predict_proba(sealed_features)[:, 1]
+            if hasattr(estimator, "raw_predict_proba") else estimator.predict_proba(sealed_features)[:, 1]
         )
-        sealed["probability"] = estimator.predict_proba(sealed[features])[:, 1]
+        sealed["probability"] = estimator.predict_proba(sealed_features)[:, 1]
         metrics = {
             "evaluation_scope": "final_sealed_holdout",
             "sealed_start": split.sealed_start,
@@ -481,11 +499,12 @@ def run_batch_prediction(job_id: str) -> dict:
         score_frame=frame.dropna(subset=feature_columns).copy()
         if score_frame.empty:raise ValueError("Feature snapshot has no scoreable rows")
         _check_cancel(jid)
-        score_frame["prediction"]=estimator.predict(score_frame[feature_columns])
+        score_features=_prepare_model_features(score_frame,feature_columns,bundle.get("preprocessing"))
+        score_frame["prediction"]=estimator.predict(score_features)
         if hasattr(estimator,"predict_proba"):
-            score_frame["probability"]=estimator.predict_proba(score_frame[feature_columns])[:,1]
+            score_frame["probability"]=estimator.predict_proba(score_features)[:,1]
             if hasattr(estimator,"raw_predict_proba"):
-                score_frame["raw_probability"]=estimator.raw_predict_proba(score_frame[feature_columns])[:,1]
+                score_frame["raw_probability"]=estimator.raw_predict_proba(score_features)[:,1]
         else:
             score_frame["probability"]=score_frame["prediction"].astype(float)
         output=score_frame[["date","symbol","prediction","probability"]]

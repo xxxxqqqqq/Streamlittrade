@@ -20,7 +20,10 @@ def _progress(jid,value):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid)
         if job and job.status=="cancel_requested":job.status="canceled";job.completed_at=datetime.now(UTC);s.commit();raise RuntimeError("Task canceled")
-        if job:job.progress=value;s.commit()
+        if job:
+            job.progress=value
+            job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15)
+            s.commit()
 def _parquet(frame):
     out=io.BytesIO();frame.to_parquet(out,index=False);return out.getvalue()
 
@@ -52,6 +55,8 @@ def sync_data(job_id:str):
                 )
             else:
                 frames[symbol]=fetch_stock_data(symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"))
+            if (i + 1) % 5 == 0 or i + 1 == len(payload["symbols"]):
+                _progress(jid,5+int(35*(i+1)/len(payload["symbols"])))
         raw_frame=pd.concat([f.assign(symbol=s,date=f.index) for s,f in frames.items()],ignore_index=True)
         raw_bytes=_parquet(raw_frame);raw_hash=hashlib.sha256(raw_bytes).hexdigest();raw_uri=upload_bytes(f"data/raw/{raw.id}/{raw_hash[:12]}.parquet",raw_bytes,"application/vnd.apache.parquet")
         _progress(jid,45)
@@ -108,10 +113,14 @@ def materialize_features(job_id:str):
     try:
         frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri))).sort_values(["symbol","date"])
         non_finite_replacements={}
-        for definition in definitions:
+        computed_columns={}
+        for index,definition in enumerate(definitions):
             column,replaced=_compute_feature_column_with_diagnostics(frame, definition)
-            frame[definition.slug]=column
+            computed_columns[definition.slug]=column
             non_finite_replacements[definition.slug]=replaced
+            if (index + 1) % 5 == 0 or index + 1 == len(definitions):
+                _progress(jid,10+int(65*(index+1)/len(definitions)))
+        frame=pd.concat([frame,pd.DataFrame(computed_columns,index=frame.index)],axis=1)
         feature_columns=[d.slug for d in definitions]
         universe_columns=[column for column in ("universe_member","universe_rank") if column in frame.columns]
         profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date()),"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})}

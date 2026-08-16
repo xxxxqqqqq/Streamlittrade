@@ -17,7 +17,7 @@ class BacktestCreate(BaseModel):
     strategy_id: UUID | None = None
     model_id: UUID | None = None
     symbol: str = Field(default="DEMO", min_length=1, max_length=20)
-    symbols: list[str] = Field(default_factory=list, max_length=100)
+    symbols: list[str] = Field(default_factory=list, max_length=500)
     strategy_name: Literal["right_trend", "v_shape", "model_probability"] = "right_trend"
     strategy_parameters: dict[str, int | float] = Field(default_factory=dict)
     top_n: int = Field(default=10, ge=1, le=100)
