@@ -112,7 +112,11 @@ async def submit_backtest(
             selected=set(request.symbols) if request.symbols else available
             if not selected or not selected.issubset(available):
                 raise HTTPException(409,"回测股票池必须属于所选数据版本")
-            request.symbols=sorted(selected);request.symbol=",".join(request.symbols)
+            request.symbols=sorted(selected)
+            request.symbol=(
+                "MODEL_OOS" if request.signal_source=="model_oos"
+                else ",".join(request.symbols)
+            )
         elif not request.symbol or request.symbol=="DATA_VERSION" or request.symbol not in available:
             raise HTTPException(409,"单标的回测代码必须属于所选数据版本")
     job, run = await create_backtest(session, request, owner_id=context.user.id, project_id=context.project.id)
