@@ -7,6 +7,7 @@ import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide
 const route=useRoute(),router=useRouter()
 const submitting=ref(false),error=ref(''),job=ref<any>(null),backtestId=ref('')
 const versions=ref<any[]>([]),strategies=ref<any[]>([]),models=ref<any[]>([]),sealed=ref<any>(null)
+const sealedLoading=ref(false),initialized=ref(false)
 const form=ref({
   signal_source:'strategy',prediction_scope:'tuning_oos',model_id:'',run_type:'portfolio',data_source:'data_version',data_version_id:'',strategy_id:'',
   symbol:'',symbols:'',strategy_name:'right_trend',start_date:'2020-01-01',end_date:'2024-12-31',
@@ -22,6 +23,22 @@ const selectedStrategy=computed(()=>strategies.value.find(item=>item.id===form.v
 const selectedModel=computed(()=>models.value.find(item=>item.id===form.value.model_id))
 const modelMode=computed(()=>form.value.signal_source==='model_oos')
 const sealedMode=computed(()=>modelMode.value&&form.value.prediction_scope==='sealed_oos')
+const sealedAvailable=computed(()=>
+  sealed.value?.status==='succeeded'&&
+  Boolean(sealed.value?.artifact_uri)&&
+  sealed.value?.metrics?.evaluation_scope==='final_sealed_holdout'
+)
+const sealedStatusText=computed(()=>{
+  if(sealedLoading.value)return '正在检查封存状态'
+  if(!sealed.value)return '所选模型尚未开启最终封存区'
+  if(sealed.value.status==='queued')return '最终封存评估正在排队'
+  if(sealed.value.status==='running')return '最终封存评估正在运行'
+  if(sealed.value.status==='failed')return '最终封存评估失败，请到模型详情查看原因'
+  if(sealed.value.status!=='succeeded')return `最终封存评估状态：${sealed.value.status}`
+  if(!sealed.value.artifact_uri)return '最终封存预测产物缺失'
+  if(sealed.value.metrics?.evaluation_scope!=='final_sealed_holdout')return '最终封存评估结果不完整'
+  return '最终封存区已就绪；日期和组合规则将使用封存前登记值'
+})
 const versionedMode=computed(()=>form.value.data_source==='data_version')
 const effectiveImplementation=computed(()=>selectedStrategy.value?.implementation||form.value.strategy_name)
 const isTrend=computed(()=>effectiveImplementation.value==='right_trend')
@@ -36,10 +53,8 @@ function applyDataVersion(){
   form.value.end_date=version.specification?.end_date||form.value.end_date
 }
 
-async function applyModelScope(){
-  if(!selectedModel.value)return
-  sealed.value=(await api.get(`/models/${selectedModel.value.id}/sealed-evaluation`)).data
-  if(form.value.prediction_scope==='sealed_oos'&&sealed.value?.status==='succeeded'){
+function applyModelScope(){
+  if(form.value.prediction_scope==='sealed_oos'&&sealedAvailable.value){
     const protocol=sealed.value.metrics?.portfolio_protocol||{}
     for(const key of ['top_n','minimum_probability','rebalance_frequency','initial_cash','max_volume_participation','lot_size','commission','minimum_commission','stamp_duty','slippage']){
       if(protocol[key]!==undefined)(form.value as any)[key]=protocol[key]
@@ -51,6 +66,23 @@ async function applyModelScope(){
     const tuning=selectedModel.value.metrics?.research_split?.tuning||{}
     form.value.start_date=tuning.start||form.value.start_date
     form.value.end_date=tuning.end||form.value.end_date
+  }
+}
+
+let sealedRequest=0
+async function loadSealedEvaluation(){
+  const model=selectedModel.value
+  const request=++sealedRequest
+  sealed.value=null
+  if(!model){applyModelScope();return}
+  sealedLoading.value=true
+  try{
+    const response=await api.get(`/models/${model.id}/sealed-evaluation`)
+    if(request!==sealedRequest)return
+    sealed.value=response.data
+    applyModelScope()
+  }finally{
+    if(request===sealedRequest)sealedLoading.value=false
   }
 }
 
@@ -71,13 +103,14 @@ onMounted(async()=>{
       if(requested&&form.value.model_id===requested)form.value.signal_source='model_oos'
       const requestedScope=String(route.query.prediction_scope||'')
       if(requestedScope==='sealed_oos')form.value.prediction_scope='sealed_oos'
-      await applyModelScope()
+      await loadSealedEvaluation()
     }
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
+  finally{initialized.value=true}
 })
 watch(()=>form.value.data_version_id,applyDataVersion)
-watch(()=>form.value.model_id,()=>applyModelScope().catch(exception=>{error.value=exception.response?.data?.detail||exception.message}))
-watch(()=>form.value.prediction_scope,()=>applyModelScope().catch(exception=>{error.value=exception.response?.data?.detail||exception.message}))
+watch(()=>form.value.model_id,()=>{if(initialized.value)loadSealedEvaluation().catch(exception=>{error.value=exception.response?.data?.detail||exception.message})})
+watch(()=>form.value.prediction_scope,applyModelScope)
 
 async function waitForJob(jobId:string){
   for(let index=0;index<300;index++){
@@ -122,7 +155,7 @@ async function submit(){
           <div class="field full"><label>信号来源</label><select v-model="form.signal_source"><option value="strategy">规则策略</option><option value="model_oos" :disabled="!models.length">模型样本外预测（推荐用于模型评估）</option></select><small v-if="!models.length">当前项目还没有包含样本外预测的已训练模型。</small></div>
           <template v-if="modelMode">
             <div class="field full"><label>已登记模型</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}} · AUC {{model.metrics?.roc_auc??'—'}}</option></select><small v-if="selectedModel">模型 {{selectedModel.id.slice(0,8)}} 的预测、数据版本和完整时间范围将写入审计血缘。</small></div>
-            <div class="field full"><label>评估区间</label><select v-model="form.prediction_scope"><option value="tuning_oos">调参区样本外回测（用于比较和调整组合规则）</option><option value="sealed_oos" :disabled="sealed?.status!=='succeeded'">最终封存区回测（一次性最终检验）</option></select><small>{{sealedMode?'使用封存前锁定的完整区间和组合参数，页面与服务端均禁止修改。':'必须使用完整调参区，允许比较组合参数，但不能把结果称为最终表现。'}}</small></div>
+            <div class="field full"><label>评估区间</label><select v-model="form.prediction_scope"><option value="tuning_oos">调参区样本外回测（用于比较和调整组合规则）</option><option value="sealed_oos" :disabled="!sealedAvailable">最终封存区回测（一次性最终检验）</option></select><small>{{sealedMode?'使用封存前锁定的完整区间和组合参数，页面与服务端均禁止修改。':sealedStatusText+'；调参区必须使用完整区间，不能把结果称为最终表现。'}}</small></div>
             <div class="field"><label>Top-N 持仓数量</label><input v-model.number="form.top_n" type="number" min="1" max="100" :disabled="sealedMode"/></div>
             <div class="field"><label>最低入选概率</label><input v-model.number="form.minimum_probability" type="number" min="0" max="1" step="0.01" :disabled="sealedMode"/></div>
             <div class="field"><label>调仓频率（交易日）</label><input v-model.number="form.rebalance_frequency" type="number" min="1" max="60" :disabled="sealedMode"/></div>
