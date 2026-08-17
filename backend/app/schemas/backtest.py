@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class BacktestCreate(BaseModel):
     signal_source: Literal["strategy", "model_oos"] = "strategy"
+    prediction_scope: Literal["tuning_oos", "sealed_oos"] = "tuning_oos"
+    portfolio_protocol_source: str = Field(default="not_applicable", max_length=64)
     run_type: Literal["single", "portfolio"] = "single"
     data_source: Literal["data_version", "demo", "baostock"] = "demo"
     data_version_id: UUID | None = None

@@ -355,6 +355,7 @@ def train_experiment(job_id: str) -> dict:
         model_id = uuid4()
         model_uri = upload_bytes(f"models/{model_id}/{reproducibility['model_sha256'][:12]}/model.joblib", model_payload, "application/octet-stream")
         prediction_output = io.BytesIO()
+        predictions["prediction_scope"] = "tuning_oos"
         predictions.to_parquet(prediction_output, index=False)
         prediction_payload = prediction_output.getvalue()
         prediction_hash = hashlib.sha256(prediction_payload).hexdigest()
@@ -364,6 +365,7 @@ def train_experiment(job_id: str) -> dict:
             "application/vnd.apache.parquet",
         )
         reproducibility["prediction_sha256"] = prediction_hash
+        reproducibility["prediction_scope"] = "tuning_oos"
         with SyncSessionFactory() as session:
             job, record = session.get(Job, jid), session.get(Experiment, exp_id)
             record.status, record.metrics, record.reproducibility = "succeeded", metrics, reproducibility
@@ -398,6 +400,7 @@ def evaluate_sealed_model(job_id: str) -> dict:
         evaluation.status = "running"
         session.commit()
         evaluation_id = evaluation.id
+        portfolio_protocol = dict(job.payload.get("portfolio_protocol") or {})
     try:
         frame = pd.read_parquet(io.BytesIO(download_bytes(dataset.artifact_uri))).sort_values(["date", "symbol"]).reset_index(drop=True)
         bundle = joblib.load(io.BytesIO(download_bytes(model.artifact_uri)))
@@ -423,9 +426,12 @@ def evaluate_sealed_model(job_id: str) -> dict:
         sealed["probability"] = estimator.predict_proba(sealed_features)[:, 1]
         metrics = {
             "evaluation_scope": "final_sealed_holdout",
+            "prediction_scope": "sealed_oos",
             "sealed_start": split.sealed_start,
             "sealed_end": split.sealed_end,
             "sealed_rows": int(len(sealed)),
+            "portfolio_protocol": portfolio_protocol,
+            "portfolio_protocol_source": "preregistered",
             "accuracy": round(float(accuracy_score(sealed.label, sealed.prediction)), 6),
             "balanced_accuracy": round(float(balanced_accuracy_score(sealed.label, sealed.prediction)), 6),
             "precision": round(float(precision_score(sealed.label, sealed.prediction, zero_division=0)), 6),
@@ -437,7 +443,8 @@ def evaluate_sealed_model(job_id: str) -> dict:
             **economic_metrics(sealed, horizon=horizon),
         }
         output = io.BytesIO()
-        sealed[["date", "symbol", "future_return", "label", "prediction", "raw_probability", "probability"]].to_parquet(output, index=False)
+        sealed["prediction_scope"] = "sealed_oos"
+        sealed[["date", "symbol", "future_return", "label", "prediction", "raw_probability", "probability", "prediction_scope"]].to_parquet(output, index=False)
         payload = output.getvalue()
         content_hash = hashlib.sha256(payload).hexdigest()
         uri = upload_bytes(
@@ -507,7 +514,16 @@ def run_batch_prediction(job_id: str) -> dict:
                 score_frame["raw_probability"]=estimator.raw_predict_proba(score_features)[:,1]
         else:
             score_frame["probability"]=score_frame["prediction"].astype(float)
-        output=score_frame[["date","symbol","prediction","probability"]]
+        fit_end_raw=(bundle.get("reproducibility") or {}).get("fit_end")
+        fit_end=pd.Timestamp(fit_end_raw).normalize() if fit_end_raw else None
+        score_start=pd.to_datetime(score_frame["date"]).min().normalize()
+        score_end=pd.to_datetime(score_frame["date"]).max().normalize()
+        prediction_scope=(
+            "live_forward" if fit_end is not None and score_start > fit_end
+            else "historical_rescore_not_backtest_eligible"
+        )
+        output=score_frame[["date","symbol","prediction","probability"]].copy()
+        output["prediction_scope"]=prediction_scope
         payload_buffer=io.BytesIO();output.to_parquet(payload_buffer,index=False);payload=payload_buffer.getvalue()
         digest=hashlib.sha256(payload).hexdigest()
         artifact_uri=upload_bytes(
@@ -520,6 +536,11 @@ def run_batch_prediction(job_id: str) -> dict:
             "rows":len(output),
             "positive_rate":round(float(output["prediction"].mean()),6),
             "mean_probability":round(float(output["probability"].mean()),6),
+            "prediction_scope":prediction_scope,
+            "score_start":score_start.date().isoformat(),
+            "score_end":score_end.date().isoformat(),
+            "model_fit_end":fit_end.date().isoformat() if fit_end is not None else None,
+            "historical_backtest_eligible":False,
             "content_sha256":digest,
         }
         with SyncSessionFactory() as session:

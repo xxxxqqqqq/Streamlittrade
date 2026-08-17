@@ -17,7 +17,8 @@ from backend.app.infrastructure.object_storage import upload_json
 from backend.app.models.backtest import BacktestRun
 from backend.app.models.data_catalog import DataVersion
 from backend.app.models.job import Job
-from backend.app.models.research import Experiment, ModelVersion
+from backend.app.models.research import Experiment, ModelVersion, SealedEvaluation
+from backend.app.services.model_backtest_gate import prediction_window
 from backend.app.infrastructure.object_storage import download_bytes
 import io
 from quant_core import (
@@ -96,6 +97,7 @@ def _benchmark(frames: dict[str, pd.DataFrame]) -> pd.Series:
 def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
     """Backtest immutable OOS probabilities against their exact market version."""
     model_id = UUID(str(payload["model_id"]))
+    prediction_scope = str(payload.get("prediction_scope") or "tuning_oos")
     with SyncSessionFactory() as session:
         row = session.execute(
             select(ModelVersion, Experiment)
@@ -108,9 +110,26 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
         if row is None:
             raise LookupError("Model does not exist in this project")
         model, experiment = row
-        if not model.prediction_artifact_uri:
-            raise ValueError("Model has no out-of-sample prediction artifact")
-        prediction_uri = model.prediction_artifact_uri
+        sealed_evaluation = None
+        if prediction_scope == "sealed_oos":
+            sealed_evaluation = session.scalar(
+                select(SealedEvaluation).where(
+                    SealedEvaluation.model_id == model.id,
+                    SealedEvaluation.dataset_id == experiment.dataset_id,
+                    SealedEvaluation.status == "succeeded",
+                )
+            )
+            if not sealed_evaluation or not sealed_evaluation.artifact_uri:
+                raise ValueError("Model has no successful final sealed prediction artifact")
+            prediction_uri = sealed_evaluation.artifact_uri
+            prediction_sha256 = sealed_evaluation.content_sha256
+            sealed_metrics = dict(sealed_evaluation.metrics or {})
+        else:
+            if not model.prediction_artifact_uri:
+                raise ValueError("Model has no tuning out-of-sample prediction artifact")
+            prediction_uri = model.prediction_artifact_uri
+            prediction_sha256 = (model.reproducibility or {}).get("prediction_sha256")
+            sealed_metrics = None
         model_name, model_version, algorithm = model.name, model.version, model.algorithm
         reproducibility = dict(model.reproducibility or {})
         model_metrics = dict(model.metrics or {})
@@ -118,6 +137,13 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
     predictions = pd.read_parquet(io.BytesIO(download_bytes(prediction_uri)))
     predictions["date"] = pd.to_datetime(predictions["date"]).dt.normalize()
     start, end = pd.Timestamp(payload["start_date"]), pd.Timestamp(payload["end_date"])
+    allowed_start, allowed_end = prediction_window(model_metrics, sealed_metrics, prediction_scope)
+    if start != pd.Timestamp(allowed_start) or end != pd.Timestamp(allowed_end):
+        raise ValueError("Model backtest must use the complete immutable prediction scope")
+    if "prediction_scope" in predictions.columns:
+        artifact_scopes = set(predictions["prediction_scope"].dropna().astype(str).unique())
+        if artifact_scopes != {prediction_scope}:
+            raise ValueError("Prediction artifact scope does not match the requested backtest scope")
     predictions = predictions.loc[predictions["date"].between(start, end)].copy()
     if predictions.empty:
         raise ValueError("No OOS predictions overlap the requested backtest period")
@@ -153,25 +179,42 @@ def _model_oos_portfolio_result(payload: dict[str, Any], project_id: UUID):
     dataset_meta = reproducibility.get("dataset") or {}
     source_meta = dataset_meta.get("source") if isinstance(dataset_meta, dict) else {}
     audit["portfolio_construction"] = construction
+    audit["portfolio_construction"]["prediction_scope"] = prediction_scope
+    audit["portfolio_construction"]["portfolio_protocol_source"] = payload.get("portfolio_protocol_source")
+    audit["portfolio_construction"]["date_policy"] = "complete_immutable_scope"
     audit["model_lineage"] = {
         "model_id": str(model_id),
         "model_name": model_name,
         "model_version": model_version,
         "algorithm": algorithm,
         "model_sha256": reproducibility.get("model_sha256"),
-        "prediction_sha256": reproducibility.get("prediction_sha256"),
+        "prediction_sha256": prediction_sha256,
         "prediction_artifact_uri": prediction_uri,
+        "prediction_scope": prediction_scope,
+        "prediction_start": allowed_start,
+        "prediction_end": allowed_end,
+        "fit_end": reproducibility.get("fit_end"),
+        "sealed_start": reproducibility.get("sealed_start"),
+        "portfolio_protocol_source": payload.get("portfolio_protocol_source"),
         "data_version_id": str(payload["data_version_id"]),
         "data_version_sha256": (
             source_meta.get("data_version_sha256")
             if isinstance(source_meta, dict) else None
         ),
-        "validation": model_metrics.get("split", "purged_walk_forward_oos"),
-        "evaluation_scope": model_metrics.get("evaluation_scope", "cv_oos"),
+        "validation": (
+            "final_sealed_holdout" if prediction_scope == "sealed_oos"
+            else model_metrics.get("split", "purged_walk_forward_oos")
+        ),
+        "evaluation_scope": (
+            "final_sealed_holdout" if prediction_scope == "sealed_oos"
+            else model_metrics.get("evaluation_scope", "tuning_oos")
+        ),
     }
     metrics.update(
         {
             "signal_source": "model_oos",
+            "prediction_scope": prediction_scope,
+            "portfolio_protocol_source": payload.get("portfolio_protocol_source"),
             "model_id": str(model_id),
             "prediction_rows": construction["prediction_rows"],
             "prediction_dates": construction["prediction_dates"],

@@ -20,6 +20,9 @@ async def create_backtest(session:AsyncSession,request:BacktestCreate,*,owner_id
         portfolio_construction={
             "method":"cross_sectional_top_n",
             "weighting":"equal_weight",
+            "prediction_scope":request.prediction_scope,
+            "portfolio_protocol_source":request.portfolio_protocol_source,
+            "date_policy":"complete_immutable_scope",
             "top_n":request.top_n,
             "minimum_probability":request.minimum_probability,
             "rebalance_frequency":request.rebalance_frequency,

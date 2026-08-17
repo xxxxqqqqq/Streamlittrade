@@ -9,6 +9,7 @@ from backend.app.schemas.research import (
     DatasetCreate,
     ExperimentCreate,
     PredictionCreate,
+    SealedEvaluationCreate,
     StrategyCreate,
 )
 
@@ -110,6 +111,16 @@ class ResearchContractTests(unittest.TestCase):
 
         self.assertEqual(request.model_id, model_id)
         self.assertEqual(request.feature_snapshot_id, snapshot_id)
+
+    def test_sealed_evaluation_preregisters_portfolio_protocol(self):
+        request = SealedEvaluationCreate(reason="已经完成调参区审核并决定开启最终封存区")
+        self.assertEqual(request.portfolio_protocol.top_n, 5)
+        self.assertEqual(request.portfolio_protocol.minimum_probability, 0.55)
+        with self.assertRaises(ValidationError):
+            SealedEvaluationCreate(
+                reason="已经完成调参区审核并决定开启最终封存区",
+                portfolio_protocol={"lot_size": 150},
+            )
 
 
 if __name__ == "__main__":

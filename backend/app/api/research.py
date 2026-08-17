@@ -159,7 +159,10 @@ async def create_sealed_evaluation(
     job = Job(
         id=jid, owner_id=context.user.id, project_id=context.project.id,
         kind="sealed_evaluation", status="queued", progress=0,
-        payload={"sealed_evaluation_id": str(evaluation_id)},
+        payload={
+            "sealed_evaluation_id": str(evaluation_id),
+            "portfolio_protocol": body.portfolio_protocol.model_dump(mode="json"),
+        },
     )
     evaluation = SealedEvaluation(
         id=evaluation_id, project_id=context.project.id, dataset_id=dataset.id,
@@ -169,7 +172,10 @@ async def create_sealed_evaluation(
     session.add(AuditLog(
         actor_id=admin.id, action="model.sealed_evaluation_opened",
         resource_type="model", resource_id=str(model.id),
-        details={"dataset_id": str(dataset.id), "reason": body.reason},
+        details={
+            "dataset_id": str(dataset.id), "reason": body.reason,
+            "portfolio_protocol": body.portfolio_protocol.model_dump(mode="json"),
+        },
     ))
     add_outbox(session, job, "backend.app.workers.research.evaluate_sealed_model")
     await session.commit()

@@ -62,6 +62,21 @@ class BacktestRequestTests(unittest.TestCase):
         self.assertEqual(request.strategy_name, "model_probability")
         self.assertEqual(request.strategy_parameters["top_n"], 8)
 
+    def test_model_oos_scope_is_explicit_and_validated(self):
+        model_id = uuid4()
+        sealed = BacktestCreate(
+            signal_source="model_oos",
+            model_id=model_id,
+            prediction_scope="sealed_oos",
+        )
+        self.assertEqual(sealed.prediction_scope, "sealed_oos")
+        with self.assertRaises(ValidationError):
+            BacktestCreate(
+                signal_source="model_oos",
+                model_id=model_id,
+                prediction_scope="handpicked_best_month",
+            )
+
     def test_invalid_moving_average_order_is_rejected(self):
         with self.assertRaises(ValidationError):
             BacktestCreate(

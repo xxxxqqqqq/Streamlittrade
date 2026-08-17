@@ -78,8 +78,28 @@ class ModelRead(BaseModel):
     id: UUID; experiment_id: UUID; name: str; version: int; algorithm: str; artifact_uri: str; prediction_artifact_uri: str | None; metrics: dict[str, Any]; reproducibility: dict[str, Any]; stage: str; created_at: datetime
 
 
+class SealedPortfolioProtocol(BaseModel):
+    top_n: int = Field(default=5, ge=1, le=100)
+    minimum_probability: float = Field(default=0.55, ge=0, le=1)
+    rebalance_frequency: int = Field(default=5, ge=1, le=60)
+    initial_cash: float = Field(default=1_000_000, gt=0, le=1_000_000_000)
+    max_volume_participation: float = Field(default=0.05, gt=0, le=1)
+    lot_size: int = Field(default=100, ge=100, le=10_000)
+    commission: float = Field(default=0.0003, ge=0, le=0.05)
+    minimum_commission: float = Field(default=5.0, ge=0, le=1000)
+    stamp_duty: float = Field(default=0.0005, ge=0, le=0.05)
+    slippage: float = Field(default=0.001, ge=0, le=0.1)
+
+    @model_validator(mode="after")
+    def validate_execution_rules(self):
+        if self.lot_size % 100:
+            raise ValueError("整手股数必须是100的倍数")
+        return self
+
+
 class SealedEvaluationCreate(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
+    portfolio_protocol: SealedPortfolioProtocol = Field(default_factory=SealedPortfolioProtocol)
 
 
 class SealedEvaluationRead(BaseModel):
@@ -91,6 +111,7 @@ class SealedEvaluationRead(BaseModel):
     status: str
     reason: str
     metrics: dict[str, Any] | None
+    artifact_uri: str | None
     content_sha256: str | None
     error_message: str | None
     created_at: datetime

@@ -6,9 +6,9 @@ import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide
 
 const route=useRoute(),router=useRouter()
 const submitting=ref(false),error=ref(''),job=ref<any>(null),backtestId=ref('')
-const versions=ref<any[]>([]),strategies=ref<any[]>([]),models=ref<any[]>([])
+const versions=ref<any[]>([]),strategies=ref<any[]>([]),models=ref<any[]>([]),sealed=ref<any>(null)
 const form=ref({
-  signal_source:'strategy',model_id:'',run_type:'portfolio',data_source:'data_version',data_version_id:'',strategy_id:'',
+  signal_source:'strategy',prediction_scope:'tuning_oos',model_id:'',run_type:'portfolio',data_source:'data_version',data_version_id:'',strategy_id:'',
   symbol:'',symbols:'',strategy_name:'right_trend',start_date:'2020-01-01',end_date:'2024-12-31',
   initial_cash:1000000,max_positions:5,max_volume_participation:0.05,
   lot_size:100,commission:0.0003,minimum_commission:5,stamp_duty:0.0005,slippage:0.001,
@@ -21,6 +21,7 @@ const selectedVersion=computed(()=>versions.value.find(item=>item.id===form.valu
 const selectedStrategy=computed(()=>strategies.value.find(item=>item.id===form.value.strategy_id))
 const selectedModel=computed(()=>models.value.find(item=>item.id===form.value.model_id))
 const modelMode=computed(()=>form.value.signal_source==='model_oos')
+const sealedMode=computed(()=>modelMode.value&&form.value.prediction_scope==='sealed_oos')
 const versionedMode=computed(()=>form.value.data_source==='data_version')
 const effectiveImplementation=computed(()=>selectedStrategy.value?.implementation||form.value.strategy_name)
 const isTrend=computed(()=>effectiveImplementation.value==='right_trend')
@@ -33,6 +34,24 @@ function applyDataVersion(){
   form.value.symbol=symbols[0]||''
   form.value.start_date=version.specification?.start_date||form.value.start_date
   form.value.end_date=version.specification?.end_date||form.value.end_date
+}
+
+async function applyModelScope(){
+  if(!selectedModel.value)return
+  sealed.value=(await api.get(`/models/${selectedModel.value.id}/sealed-evaluation`)).data
+  if(form.value.prediction_scope==='sealed_oos'&&sealed.value?.status==='succeeded'){
+    const protocol=sealed.value.metrics?.portfolio_protocol||{}
+    for(const key of ['top_n','minimum_probability','rebalance_frequency','initial_cash','max_volume_participation','lot_size','commission','minimum_commission','stamp_duty','slippage']){
+      if(protocol[key]!==undefined)(form.value as any)[key]=protocol[key]
+    }
+    form.value.start_date=sealed.value.metrics?.sealed_start||form.value.start_date
+    form.value.end_date=sealed.value.metrics?.sealed_end||form.value.end_date
+  }else{
+    if(form.value.prediction_scope==='sealed_oos')form.value.prediction_scope='tuning_oos'
+    const tuning=selectedModel.value.metrics?.research_split?.tuning||{}
+    form.value.start_date=tuning.start||form.value.start_date
+    form.value.end_date=tuning.end||form.value.end_date
+  }
 }
 
 onMounted(async()=>{
@@ -50,10 +69,15 @@ onMounted(async()=>{
       const requested=String(route.query.model_id||'')
       form.value.model_id=models.value.some((item:any)=>item.id===requested)?requested:models.value[0].id
       if(requested&&form.value.model_id===requested)form.value.signal_source='model_oos'
+      const requestedScope=String(route.query.prediction_scope||'')
+      if(requestedScope==='sealed_oos')form.value.prediction_scope='sealed_oos'
+      await applyModelScope()
     }
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
 })
 watch(()=>form.value.data_version_id,applyDataVersion)
+watch(()=>form.value.model_id,()=>applyModelScope().catch(exception=>{error.value=exception.response?.data?.detail||exception.message}))
+watch(()=>form.value.prediction_scope,()=>applyModelScope().catch(exception=>{error.value=exception.response?.data?.detail||exception.message}))
 
 async function waitForJob(jobId:string){
   for(let index=0;index<300;index++){
@@ -97,10 +121,11 @@ async function submit(){
         <div class="form-grid">
           <div class="field full"><label>信号来源</label><select v-model="form.signal_source"><option value="strategy">规则策略</option><option value="model_oos" :disabled="!models.length">模型样本外预测（推荐用于模型评估）</option></select><small v-if="!models.length">当前项目还没有包含样本外预测的已训练模型。</small></div>
           <template v-if="modelMode">
-            <div class="field full"><label>已登记模型</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}} · AUC {{model.metrics?.roc_auc??'—'}}</option></select><small v-if="selectedModel">模型 {{selectedModel.id.slice(0,8)}} 的 OOS 预测和训练数据版本将写入回测审计血缘。</small></div>
-            <div class="field"><label>Top-N 持仓数量</label><input v-model.number="form.top_n" type="number" min="1" max="100"/></div>
-            <div class="field"><label>最低入选概率</label><input v-model.number="form.minimum_probability" type="number" min="0" max="1" step="0.01"/></div>
-            <div class="field"><label>调仓频率（交易日）</label><input v-model.number="form.rebalance_frequency" type="number" min="1" max="60"/></div>
+            <div class="field full"><label>已登记模型</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}} · AUC {{model.metrics?.roc_auc??'—'}}</option></select><small v-if="selectedModel">模型 {{selectedModel.id.slice(0,8)}} 的预测、数据版本和完整时间范围将写入审计血缘。</small></div>
+            <div class="field full"><label>评估区间</label><select v-model="form.prediction_scope"><option value="tuning_oos">调参区样本外回测（用于比较和调整组合规则）</option><option value="sealed_oos" :disabled="sealed?.status!=='succeeded'">最终封存区回测（一次性最终检验）</option></select><small>{{sealedMode?'使用封存前锁定的完整区间和组合参数，页面与服务端均禁止修改。':'必须使用完整调参区，允许比较组合参数，但不能把结果称为最终表现。'}}</small></div>
+            <div class="field"><label>Top-N 持仓数量</label><input v-model.number="form.top_n" type="number" min="1" max="100" :disabled="sealedMode"/></div>
+            <div class="field"><label>最低入选概率</label><input v-model.number="form.minimum_probability" type="number" min="0" max="1" step="0.01" :disabled="sealedMode"/></div>
+            <div class="field"><label>调仓频率（交易日）</label><input v-model.number="form.rebalance_frequency" type="number" min="1" max="60" :disabled="sealedMode"/></div>
             <div class="field"><label>组合权重</label><input value="等权重" disabled/></div>
           </template>
           <div v-if="!modelMode" class="field"><label>回测类型</label><select v-model="form.run_type"><option value="portfolio">多标的组合</option><option value="single">单标的兼容模式</option></select></div>
@@ -121,15 +146,15 @@ async function submit(){
             <div class="field"><label>反弹阈值</label><input v-model.number="form.rebound_threshold" type="number" step="0.01"/></div>
           </template>
           <div v-if="!modelMode" class="field"><label>最大持仓数</label><input v-model.number="form.max_positions" type="number" min="1" max="100" :disabled="form.run_type==='single'"/></div>
-          <div class="field"><label>最大成交量参与率</label><input v-model.number="form.max_volume_participation" type="number" min="0.001" max="1" step="0.01" :disabled="form.run_type==='single'"/></div>
-          <div class="field"><label>整手股数</label><input v-model.number="form.lot_size" type="number" min="100" step="100"/></div>
-          <div class="field"><label>买卖佣金率</label><input v-model.number="form.commission" type="number" min="0" max="0.05" step="0.0001"/></div>
-          <div class="field"><label>最低佣金</label><input v-model.number="form.minimum_commission" type="number" min="0" step="1"/></div>
-          <div class="field"><label>卖出印花税率</label><input v-model.number="form.stamp_duty" type="number" min="0" max="0.05" step="0.0001"/></div>
-          <div class="field"><label>单边滑点率</label><input v-model.number="form.slippage" type="number" min="0" max="0.1" step="0.0001"/></div>
-          <div class="field"><label>初始资金</label><input v-model.number="form.initial_cash" type="number" min="1000"/></div>
-          <div class="field"><label>开始日期</label><input v-model="form.start_date" type="date"/></div>
-          <div class="field"><label>结束日期</label><input v-model="form.end_date" type="date"/></div>
+          <div class="field"><label>最大成交量参与率</label><input v-model.number="form.max_volume_participation" type="number" min="0.001" max="1" step="0.01" :disabled="form.run_type==='single'||sealedMode"/></div>
+          <div class="field"><label>整手股数</label><input v-model.number="form.lot_size" type="number" min="100" step="100" :disabled="sealedMode"/></div>
+          <div class="field"><label>买卖佣金率</label><input v-model.number="form.commission" type="number" min="0" max="0.05" step="0.0001" :disabled="sealedMode"/></div>
+          <div class="field"><label>最低佣金</label><input v-model.number="form.minimum_commission" type="number" min="0" step="1" :disabled="sealedMode"/></div>
+          <div class="field"><label>卖出印花税率</label><input v-model.number="form.stamp_duty" type="number" min="0" max="0.05" step="0.0001" :disabled="sealedMode"/></div>
+          <div class="field"><label>单边滑点率</label><input v-model.number="form.slippage" type="number" min="0" max="0.1" step="0.0001" :disabled="sealedMode"/></div>
+          <div class="field"><label>初始资金</label><input v-model.number="form.initial_cash" type="number" min="1000" :disabled="sealedMode"/></div>
+          <div class="field"><label>开始日期</label><input v-model="form.start_date" type="date" :disabled="modelMode"/></div>
+          <div class="field"><label>结束日期</label><input v-model="form.end_date" type="date" :disabled="modelMode"/></div>
         </div>
         <div v-if="job" class="job-progress"><div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待回测资源':modelMode?'正在构建模型选股组合并计算可信账本':'正在读取版本化行情并计算账本'}}</span><b>{{job.progress}}%</b></div><div class="progress-track"><i :style="{width:job.progress+'%'}"></i></div></div>
         <p v-if="error" class="error-box">{{error}}</p>

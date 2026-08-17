@@ -29,7 +29,9 @@ async function downloadDataset(row:any){
 }
 function symbols(row:any){return String(row.symbol||'').split(',').map((item:string)=>item.trim()).filter(Boolean)}
 function strategyLabel(row:any){
-  if(row.signal_source==='model_oos'||row.strategy_name==='model_probability')return '模型样本外信号'
+  if(row.signal_source==='model_oos'||row.strategy_name==='model_probability'){
+    return row.portfolio_construction?.prediction_scope==='sealed_oos'?'最终封存区模型信号':'调参区模型信号'
+  }
   return ({right_trend:'右侧趋势策略',v_shape:'V型反转策略'} as Record<string,string>)[row.strategy_name]||row.strategy_name||'未命名策略'
 }
 function metric(row:any,key:string){
