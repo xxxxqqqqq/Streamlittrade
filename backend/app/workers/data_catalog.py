@@ -204,6 +204,14 @@ def _quantile_analysis(frame,feature,quantiles):
     }
 
 
+def _factor_metric_frame(frame, feature):
+    """Return the narrow, finite input required to evaluate one factor."""
+
+    result=frame[["date","symbol","forward_return",feature]].copy()
+    result[feature]=result[feature].replace([np.inf,-np.inf],np.nan)
+    return result
+
+
 def research_factors(job_id:str):
     """Evaluate a feature snapshot using forward-return cross sections."""
 
@@ -240,13 +248,18 @@ def research_factors(job_id:str):
         min_abs_rank_ic=float(run.parameters["min_abs_rank_ic"])
         min_ic_ir=float(run.parameters["min_ic_ir"])
         for index,feature in enumerate(feature_slugs):
-            values=frame[feature].replace([np.inf,-np.inf],np.nan)
+            # Research one factor from a narrow frame.  Copying the complete
+            # multi-factor snapshot for every metric made large studies scale
+            # quadratically in memory traffic and caused 36-factor jobs to hit
+            # the one-hour worker timeout.
+            factor_frame=_factor_metric_frame(frame,feature)
+            values=factor_frame[feature]
             coverage=float(values.notna().mean())
-            ic=_daily_correlation(frame.assign(**{feature:values}),feature,"pearson")
-            rank_ic=_daily_correlation(frame.assign(**{feature:values}),feature,"spearman")
+            ic=_daily_correlation(factor_frame,feature,"pearson")
+            rank_ic=_daily_correlation(factor_frame,feature,"spearman")
             rank_ic_std=rank_ic.std()
             rank_ic_ir=float(rank_ic.mean()/rank_ic_std) if len(rank_ic)>1 and rank_ic_std else np.nan
-            quantile=_quantile_analysis(frame.assign(**{feature:values}),feature,int(run.parameters["quantiles"]))
+            quantile=_quantile_analysis(factor_frame,feature,int(run.parameters["quantiles"]))
             preliminary_passed=(
                 coverage>=min_coverage
                 and abs(float(rank_ic.mean()))>=min_abs_rank_ic if len(rank_ic) else False

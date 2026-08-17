@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from backend.app.schemas.data_catalog import FeatureCreate, SyncCreate
 from backend.app.services.factors import compute_factor, evaluate_expression, factor_library_payload
-from backend.app.workers.data_catalog import _compute_feature_column
+from backend.app.workers.data_catalog import _compute_feature_column, _factor_metric_frame
 
 
 class DataCatalogContractTests(unittest.TestCase):
@@ -169,6 +169,24 @@ class DataCatalogContractTests(unittest.TestCase):
         column = _compute_feature_column(frame, definition)
 
         self.assertFalse(np.isinf(column).any())
+
+    def test_factor_research_uses_a_narrow_finite_metric_frame(self):
+        frame = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=2),
+            "symbol": ["000001", "000001"],
+            "forward_return": [0.1, -0.1],
+            "factor_a": [1.0, np.inf],
+            "factor_b": [3.0, 4.0],
+        })
+
+        metric_frame = _factor_metric_frame(frame, "factor_a")
+
+        self.assertEqual(
+            list(metric_frame.columns),
+            ["date", "symbol", "forward_return", "factor_a"],
+        )
+        self.assertTrue(pd.isna(metric_frame.loc[1, "factor_a"]))
+        self.assertTrue(np.isinf(frame.loc[1, "factor_a"]))
 
 
 if __name__ == "__main__":
