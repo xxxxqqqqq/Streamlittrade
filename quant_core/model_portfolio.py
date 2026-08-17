@@ -112,9 +112,7 @@ def build_model_signal_frames(
                 frame.loc[date, "score"] = probability
                 signal_rows += 1
 
-    if not rebalance_log or not any(item["selected"] for item in rebalance_log):
-        raise ValueError("Portfolio construction produced no eligible model selections")
-
+    has_eligible_selections = any(item["selected"] for item in rebalance_log)
     audit = {
         "method": "cross_sectional_top_n",
         "weighting": "equal_weight",
@@ -124,6 +122,11 @@ def build_model_signal_frames(
         "prediction_rows": int(len(scored)),
         "prediction_dates": int(scored["date"].nunique()),
         "signal_rows": signal_rows,
+        "has_eligible_selections": has_eligible_selections,
+        "selection_warning": (
+            None if has_eligible_selections
+            else "No prediction met the preregistered minimum probability; portfolio remained in cash"
+        ),
         "rebalance_count": len(rebalance_log),
         "rebalances": rebalance_log,
         "execution_lag": "next_trading_day_open",

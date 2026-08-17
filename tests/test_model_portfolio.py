@@ -65,6 +65,20 @@ class ModelPortfolioConstructionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             build_model_signal_frames({"A": market("A")}, predictions)
 
+    def test_no_probability_above_threshold_is_a_valid_cash_portfolio(self):
+        dates = pd.date_range("2024-01-02", periods=8, freq="B")
+        predictions = pd.DataFrame([
+            {"date": date, "symbol": "A", "probability": 0.49}
+            for date in dates
+        ])
+        frames, audit = build_model_signal_frames(
+            {"A": market("A")}, predictions,
+            top_n=1, minimum_probability=0.55, rebalance_frequency=5,
+        )
+        self.assertFalse(frames["A"]["signal"].any())
+        self.assertFalse(audit["has_eligible_selections"])
+        self.assertIn("remained in cash", audit["selection_warning"])
+
 
 if __name__ == "__main__":
     unittest.main()
