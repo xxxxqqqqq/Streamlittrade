@@ -71,7 +71,7 @@ def fetch_stock_data(
 
             result = bs.query_history_k_data_plus(
                 code=bs_code,
-                fields="date,open,high,low,close,volume",
+                fields="date,open,high,low,close,volume,amount",
                 start_date=start,
                 end_date=end,
                 frequency="d",
@@ -88,7 +88,7 @@ def fetch_stock_data(
 
             data = pd.DataFrame(rows, columns=result.fields)
             data["date"] = pd.to_datetime(data["date"], errors="raise")
-            for column in ("open", "high", "low", "close", "volume"):
+            for column in ("open", "high", "low", "close", "volume", "amount"):
                 data[column] = pd.to_numeric(data[column], errors="raise")
 
             data = data.set_index("date")
