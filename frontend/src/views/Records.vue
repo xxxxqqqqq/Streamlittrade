@@ -7,12 +7,20 @@ import {BrainCircuit,Download,Eye,GitBranch,Plus,RefreshCw,Search,Sparkles} from
 import {downloadApiFile} from '../download'
 const props=defineProps<{kind:string}>(),router=useRouter()
 const rows=ref<any[]>([]),loading=ref(false),query=ref(''),statusFilter=ref(''),page=ref(1),pageSize=ref(20)
+const models=ref<any[]>([])
 const datasetDownloadId=ref(''),datasetDownloadError=ref('')
 const labels:any={backtests:['回测记录','查看模型组合或规则策略在历史行情中的表现'],datasets:['研究数据集','将因子快照、预测标签和数据血缘固化为训练输入'],models:['模型仓库','管理候选、验证与生产模型'],strategies:['策略管理','维护策略定义和参数版本'],jobs:['计算任务','监控排队、运行和失败任务']}
 const matching=computed(()=>rows.value.filter(item=>(!query.value||JSON.stringify(item).toLowerCase().includes(query.value.toLowerCase()))&&(!statusFilter.value||(item.status||item.stage)===statusFilter.value)))
 const paged=computed(()=>matching.value.slice((page.value-1)*pageSize.value,page.value*pageSize.value))
 const availableStatuses=computed(()=>[...new Set(rows.value.map(item=>item.status||item.stage).filter(Boolean))])
-async function load(option:boolean|PointerEvent=false){const silent=typeof option==='boolean'&&option;if(!silent)loading.value=true;try{rows.value=(await api.get('/'+props.kind)).data}finally{loading.value=false}}
+async function load(option:boolean|PointerEvent=false){
+  const silent=typeof option==='boolean'&&option
+  if(!silent)loading.value=true
+  try{
+    rows.value=(await api.get('/'+props.kind)).data
+    models.value=props.kind==='backtests'?(await api.get('/models')).data:[]
+  }finally{loading.value=false}
+}
 let timer:number|undefined
 onMounted(()=>{load();timer=window.setInterval(()=>{if(props.kind==='jobs')load(true)},5000)})
 onUnmounted(()=>window.clearInterval(timer))
@@ -27,7 +35,29 @@ async function downloadDataset(row:any){
   catch(exception:any){datasetDownloadError.value=exception.message||'下载失败，请稍后重试'}
   finally{datasetDownloadId.value=''}
 }
+function isModelBacktest(row:any){return row.signal_source==='model_oos'||row.strategy_name==='model_probability'}
 function symbols(row:any){return String(row.symbol||'').split(',').map((item:string)=>item.trim()).filter(Boolean)}
+function universeSize(row:any){
+  const recorded=Number(row.data_quality?.symbol_count)
+  return Number.isFinite(recorded)&&recorded>0?recorded:symbols(row).length
+}
+function universeName(row:any){return isModelBacktest(row)?'模型候选股票池':(symbols(row).slice(0,3).join(' · ')||'未指定标的')}
+function universeDescription(row:any){
+  const count=universeSize(row)
+  return isModelBacktest(row)?`${count||'—'} 只股票参与横截面选股`:(count>3?`等 ${count} 只股票`:`${count||0} 只股票`)
+}
+function modelName(row:any){
+  const item=models.value.find(model=>model.id===row.model_id)
+  return item?.name||`模型 ${String(row.model_id||'').slice(0,8)}`
+}
+function portfolioRules(row:any){
+  const construction=row.portfolio_construction||{},parameters=row.strategy_parameters||{}
+  const topN=construction.top_n??parameters.top_n
+  const probability=construction.minimum_probability??parameters.minimum_probability
+  const frequency=construction.rebalance_frequency??parameters.rebalance_frequency
+  if(topN===undefined||probability===undefined||frequency===undefined)return '组合规则未记录'
+  return `Top-${topN} · 概率 ≥ ${Number(probability).toFixed(2)} · ${frequency} 日调仓`
+}
 function strategyLabel(row:any){
   if(row.signal_source==='model_oos'||row.strategy_name==='model_probability'){
     return row.portfolio_construction?.prediction_scope==='sealed_oos'?'最终封存区模型信号':'调参区模型信号'
@@ -76,17 +106,17 @@ function modelDatasetHash(row:any){return row.reproducibility?.dataset?.content_
         <div class="backtest-row backtest-header"><span>股票池</span><span>信号来源</span><span>核心指标</span><span>回测区间</span><span>操作</span></div>
         <article v-for="row in paged" :key="row.id" class="backtest-row backtest-item">
           <div class="universe-cell">
-            <b>{{symbols(row).slice(0,3).join(' · ')||'未指定标的'}}</b>
-            <small>{{symbols(row).length>3?`等 ${symbols(row).length} 只股票`:`${symbols(row).length||0} 只股票`}}</small>
+            <b>{{universeName(row)}}</b>
+            <small>{{universeDescription(row)}}</small>
           </div>
           <div class="signal-cell">
             <b>{{strategyLabel(row)}}</b>
-            <small><i class="run-type" :class="row.signal_source">{{row.signal_source==='model_oos'?'模型预测':'策略规则'}}</i>{{row.run_type==='portfolio'?'组合回测':'单标的回测'}}</small>
+            <small><i class="run-type" :class="row.signal_source">{{row.signal_source==='model_oos'?'模型预测':'策略规则'}}</i>{{row.run_type==='portfolio'?'组合回测':'单标的回测'}}<template v-if="isModelBacktest(row)"> · {{modelName(row)}} · {{portfolioRules(row)}}</template></small>
           </div>
           <div class="performance-cell">
             <span :class="{positive:(metric(row,'total_return')||0)>0,negative:(metric(row,'total_return')||0)<0}"><small>累计收益</small><b>{{percent(metric(row,'total_return'))}}</b></span>
             <span><small>最大回撤</small><b>{{percent(metric(row,'max_drawdown'))}}</b></span>
-            <span><small>夏普比率</small><b>{{ratio(metric(row,'sharpe'))}}</b></span>
+            <span><small>夏普比率</small><b>{{ratio(metric(row,'sharpe_ratio'))}}</b></span>
           </div>
           <div class="date-cell"><b>{{period(row)}}</b><small>创建于 {{createdAt(row.created_at)}}</small></div>
           <div class="backtest-action"><button class="text-button" @click="router.push('/backtests/'+row.id)"><Eye :size="14"/>查看报告</button></div>
