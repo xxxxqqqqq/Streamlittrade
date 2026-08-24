@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Renew the public IP certificate without touching QuantForge data services.
+set -euo pipefail
+
+cd /opt/quantforge
+
+/opt/certbot-venv/bin/certbot renew --cert-name 8.134.107.95 --quiet --no-random-sleep-on-renew \
+  --pre-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml stop frontend'" \
+  --post-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml start frontend'" \
+  --deploy-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml restart frontend'"

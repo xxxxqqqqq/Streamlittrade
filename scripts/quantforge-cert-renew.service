@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew the QuantForge public IP HTTPS certificate
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/quantforge-cert-renew

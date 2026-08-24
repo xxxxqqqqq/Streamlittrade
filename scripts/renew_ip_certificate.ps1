@@ -7,7 +7,7 @@ set -e
 cd /opt/quantforge
 export HTTPS_PROXY=http://127.0.0.1:17890
 export HTTP_PROXY=http://127.0.0.1:17890
-/opt/certbot-venv/bin/certbot renew --cert-name 8.134.107.95 --quiet \
+/opt/certbot-venv/bin/certbot renew --cert-name 8.134.107.95 --quiet --no-random-sleep-on-renew \
   --pre-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml stop frontend'" \
   --post-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml start frontend'" \
   --deploy-hook "/bin/sh -c 'cd /opt/quantforge && docker compose -f compose.platform.yaml -f compose.production.yaml restart frontend'"
