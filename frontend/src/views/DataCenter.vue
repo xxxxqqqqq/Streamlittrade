@@ -2,6 +2,7 @@
 import {computed,onMounted,ref,watch} from 'vue'
 import {useRouter} from 'vue-router'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
 import {Check,CheckCircle2,ChevronDown,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
@@ -218,15 +219,11 @@ async function load(){
 onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.detail||exception.message))
 
 async function wait(jobId:string){
-  for(let index=0;index<300;index++){
-    const job=(await api.get(`/jobs/${jobId}`)).data
-    if(['succeeded','failed','canceled'].includes(job.status)){
-      if(job.status!=='succeeded')throw new Error(job.error_message||'任务失败')
-      return
-    }
-    await new Promise(resolve=>setTimeout(resolve,1000))
-  }
-  throw new Error('任务超时')
+  const job=await pollJobUntilTerminal(
+    async()=>(await api.get(`/jobs/${jobId}`)).data,
+    {onLongRunning:()=>notice.value='任务仍在后台计算，离开本页不会取消任务，可在任务中心查看进度。'},
+  )
+  if(job.status!=='succeeded')throw new Error(job.error_message||'任务未完成')
 }
 
 async function createSource(){

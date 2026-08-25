@@ -2,10 +2,11 @@
 import {computed,onMounted,ref,watch} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
-const submitting=ref(false),error=ref(''),job=ref<any>(null),backtestId=ref('')
+const submitting=ref(false),error=ref(''),job=ref<any>(null),backtestId=ref(''),longRunning=ref(false)
 const versions=ref<any[]>([]),strategies=ref<any[]>([]),models=ref<any[]>([]),sealed=ref<any>(null)
 const sealedLoading=ref(false),initialized=ref(false)
 const form=ref({
@@ -112,17 +113,8 @@ watch(()=>form.value.data_version_id,applyDataVersion)
 watch(()=>form.value.model_id,()=>{if(initialized.value)loadSealedEvaluation().catch(exception=>{error.value=exception.response?.data?.detail||exception.message})})
 watch(()=>form.value.prediction_scope,applyModelScope)
 
-async function waitForJob(jobId:string){
-  for(let index=0;index<300;index++){
-    job.value=(await api.get(`/jobs/${jobId}`)).data
-    if(['succeeded','failed','canceled'].includes(job.value.status))return
-    await new Promise(resolve=>setTimeout(resolve,1000))
-  }
-  throw new Error('回测执行超时，请到任务中心查看')
-}
-
 async function submit(){
-  submitting.value=true;error.value=''
+  submitting.value=true;error.value='';longRunning.value=false
   try{
     const parameters=isTrend.value
       ? {ma_short:Number(form.value.ma_short),ma_mid:Number(form.value.ma_mid),ma_long:Number(form.value.ma_long),vol_ratio:Number(form.value.vol_ratio)}
@@ -138,7 +130,10 @@ async function submit(){
     }
     const response=await api.post('/backtests',body)
     backtestId.value=response.data.backtest_id
-    await waitForJob(response.data.job_id)
+    job.value=await pollJobUntilTerminal(
+      async()=>(await api.get(`/jobs/${response.data.job_id}`)).data,
+      {onUpdate:value=>job.value=value,onLongRunning:()=>longRunning.value=true},
+    )
     if(job.value.status!=='succeeded')throw new Error(job.value.error_message||'回测失败')
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
   finally{submitting.value=false}
@@ -190,6 +185,7 @@ async function submit(){
           <div class="field"><label>结束日期</label><input v-model="form.end_date" type="date" :disabled="modelMode"/></div>
         </div>
         <div v-if="job" class="job-progress"><div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待回测资源':modelMode?'正在构建模型选股组合并计算可信账本':'正在读取版本化行情并计算账本'}}</span><b>{{job.progress}}%</b></div><div class="progress-track"><i :style="{width:job.progress+'%'}"></i></div></div>
+        <div v-if="longRunning" class="background-task-note">回测仍在后台运行。可以继续等待，或前往 <button type="button" class="text-button" @click="router.push('/jobs')">任务中心</button> 查看进度；离开本页不会取消任务。</div>
         <p v-if="error" class="error-box">{{error}}</p>
         <div class="form-actions"><button type="button" class="secondary" @click="router.push('/backtests')">取消</button><button class="primary" :disabled="submitting||(modelMode?!form.model_id:versionedMode&&!form.data_version_id)"><LoaderCircle v-if="submitting" :size="16" class="spin"/><BarChart3 v-else :size="16"/>{{submitting?'正在回测':'运行回测'}}</button></div>
       </form>

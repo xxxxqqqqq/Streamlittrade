@@ -3,6 +3,7 @@ import {computed,onMounted,ref} from 'vue'
 import {useRoute} from 'vue-router'
 import {Activity,CheckCircle2,Filter,FlaskConical,RefreshCw,XCircle} from 'lucide-vue-next'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 
 const route=useRoute()
 
@@ -61,15 +62,11 @@ async function load(){
 }
 
 async function wait(jobId:string){
-  for(let index=0;index<300;index++){
-    const job=(await api.get(`/jobs/${jobId}`)).data
-    if(['succeeded','failed','canceled'].includes(job.status)){
-      if(job.status!=='succeeded')throw new Error(job.error_message||'因子研究任务失败')
-      return
-    }
-    await new Promise(resolve=>setTimeout(resolve,1000))
-  }
-  throw new Error('因子研究任务超时')
+  const job=await pollJobUntilTerminal(
+    async()=>(await api.get(`/jobs/${jobId}`)).data,
+    {onLongRunning:()=>notice.value='因子研究仍在后台计算，离开本页不会取消任务，可在任务中心查看进度。'},
+  )
+  if(job.status!=='succeeded')throw new Error(job.error_message||'因子研究任务未完成')
 }
 
 async function createResearch(){

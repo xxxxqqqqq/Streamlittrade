@@ -2,6 +2,7 @@
 import {computed,onMounted,ref} from 'vue'
 import {useRouter} from 'vue-router'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 import {ArrowLeft,ArrowRight,CheckCircle2,Database,LoaderCircle} from 'lucide-vue-next'
 
 const router=useRouter()
@@ -24,6 +25,7 @@ const submitting=ref(false)
 const error=ref('')
 const job=ref<any>(null)
 const datasetId=ref('')
+const longRunning=ref(false)
 const progress=computed(()=>job.value?.progress??0)
 const formalMode=computed(()=>form.value.data_source==='feature_snapshot')
 const eligibleFactorRuns=computed(()=>factorRuns.value.filter(
@@ -66,17 +68,9 @@ onMounted(async()=>{
   }
 })
 
-async function waitForJob(jobId:string){
-  for(let attempt=0;attempt<180;attempt++){
-    job.value=(await api.get(`/jobs/${jobId}`)).data
-    if(['succeeded','failed'].includes(job.value.status))return
-    await new Promise(resolve=>setTimeout(resolve,1000))
-  }
-  throw new Error('数据集构建超时，请到任务中心查看状态')
-}
-
 async function submit(){
   error.value=''
+  longRunning.value=false
   submitting.value=true
   try{
     const symbols=form.value.symbols.split(/[，,\s]+/).map(value=>value.trim()).filter(Boolean)
@@ -92,8 +86,11 @@ async function submit(){
     }
     const response=await api.post('/datasets',body)
     datasetId.value=response.data.resource_id
-    await waitForJob(response.data.job_id)
-    if(job.value.status==='failed')throw new Error(job.value.error_message||'数据集构建失败')
+    job.value=await pollJobUntilTerminal(
+      async()=>(await api.get(`/jobs/${response.data.job_id}`)).data,
+      {onUpdate:value=>job.value=value,onLongRunning:()=>longRunning.value=true},
+    )
+    if(job.value.status!=='succeeded')throw new Error(job.value.error_message||'数据集构建未完成')
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message||'提交失败'
   }finally{
@@ -170,6 +167,11 @@ async function submit(){
         <div v-if="job" class="job-progress">
           <div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待 Worker':'正在合并特征与标签'}}</span><b>{{progress}}%</b></div>
           <div class="progress-track"><i :style="{width:progress+'%'}"></i></div>
+        </div>
+        <div v-if="longRunning" class="background-task-note">
+          数据量较大，任务仍在本地计算节点后台运行。可以继续等待，也可以前往
+          <button type="button" class="text-button" @click="router.push('/jobs')">任务中心</button>
+          查看进度；离开本页不会取消任务。
         </div>
         <p v-if="error" class="error-box">{{error}}</p>
         <div class="form-actions">

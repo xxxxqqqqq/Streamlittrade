@@ -1,0 +1,20 @@
+.background-task-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -6px 0 18px;
+  padding: 11px 13px;
+  border: 1px solid #cfe0f5;
+  border-radius: 8px;
+  background: #f4f8fd;
+  color: #52657d;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.background-task-note .text-button {
+  display: inline-flex;
+  padding: 0 2px;
+  font-size: 12px;
+}

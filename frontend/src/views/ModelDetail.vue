@@ -2,6 +2,7 @@
 import {computed,onMounted,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import {ArrowLeft,Boxes,CalendarDays,Database,GitBranch,RotateCcw,ShieldCheck,Sparkles} from 'lucide-vue-next'
 
@@ -43,12 +44,8 @@ async function openSealed(){
   changing.value=true;error.value=''
   try{
     const response=await api.post(`/models/${model.value.id}/sealed-evaluation`,{reason:reason.value,portfolio_protocol:sealedProtocol.value})
-    for(let attempt=0;attempt<300;attempt++){
-      const job=(await api.get(`/jobs/${response.data.job_id}`)).data
-      if(job.status==='failed')throw new Error(job.error_message||'最终封存区评估失败')
-      if(job.status==='succeeded')break
-      await new Promise(resolve=>setTimeout(resolve,1000))
-    }
+    const job=await pollJobUntilTerminal(async()=>(await api.get(`/jobs/${response.data.job_id}`)).data)
+    if(job.status!=='succeeded')throw new Error(job.error_message||'最终封存区评估未完成')
     sealed.value=(await api.get(`/models/${model.value.id}/sealed-evaluation`)).data
     model.value=(await api.get('/models')).data.find((item:any)=>item.id===route.params.id)
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}

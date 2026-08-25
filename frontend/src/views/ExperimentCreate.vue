@@ -2,11 +2,12 @@
 import {computed,onMounted,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
+import {pollJobUntilTerminal} from '../jobPolling'
 import {ArrowLeft,ArrowRight,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
 const datasets=ref<any[]>([])
-const job=ref<any>(null),error=ref(''),submitting=ref(false),modelId=ref('')
+const job=ref<any>(null),error=ref(''),submitting=ref(false),modelId=ref(''),longRunning=ref(false)
 const form=ref({
   name:'多算法基线实验',
   dataset_id:String(route.query.dataset||''),
@@ -22,17 +23,8 @@ onMounted(async()=>{
   if(!form.value.dataset_id&&readyDatasets.value.length)form.value.dataset_id=readyDatasets.value[0].id
 })
 
-async function waitForJob(jobId:string){
-  for(let index=0;index<300;index++){
-    job.value=(await api.get(`/jobs/${jobId}`)).data
-    if(['succeeded','failed'].includes(job.value.status))return
-    await new Promise(resolve=>setTimeout(resolve,1000))
-  }
-  throw new Error('模型训练超时，请到任务中心查看状态')
-}
-
 async function submit(){
-  error.value='';submitting.value=true
+  error.value='';submitting.value=true;longRunning.value=false
   try{
     const parameters=form.value.algorithm==='hist_gradient_boosting'
       ? {max_iter:Number(form.value.max_iter),max_depth:Number(form.value.max_depth),learning_rate:Number(form.value.learning_rate)}
@@ -43,8 +35,11 @@ async function submit(){
       name:form.value.name,dataset_id:form.value.dataset_id,
       algorithm:form.value.algorithm,parameters,
     })
-    await waitForJob(response.data.job_id)
-    if(job.value.status==='failed')throw new Error(job.value.error_message||'训练失败')
+    job.value=await pollJobUntilTerminal(
+      async()=>(await api.get(`/jobs/${response.data.job_id}`)).data,
+      {onUpdate:value=>job.value=value,onLongRunning:()=>longRunning.value=true},
+    )
+    if(job.value.status!=='succeeded')throw new Error(job.value.error_message||'训练未完成')
     modelId.value=job.value.result_summary.model_id
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message||'提交失败'}
   finally{submitting.value=false}
@@ -78,6 +73,7 @@ async function submit(){
           </template>
         </div>
         <div v-if="job" class="job-progress"><div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待训练资源':'正在训练、解释和评估模型'}}</span><b>{{job.progress}}%</b></div><div class="progress-track"><i :style="{width:job.progress+'%'}"></i></div></div>
+        <div v-if="longRunning" class="background-task-note">训练仍在后台运行。可以继续等待，或前往 <button type="button" class="text-button" @click="router.push('/jobs')">任务中心</button> 查看进度；离开本页不会取消任务。</div>
         <p v-if="error" class="error-box">{{error}}</p>
         <div class="form-actions"><button type="button" class="secondary" @click="router.push('/experiments')">取消</button><button class="primary" :disabled="submitting||!readyDatasets.length"><LoaderCircle v-if="submitting" :size="16" class="spin"/><BrainCircuit v-else :size="16"/>{{submitting?'正在训练':'开始训练'}}</button></div>
       </form>
