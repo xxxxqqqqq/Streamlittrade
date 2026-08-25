@@ -19,7 +19,7 @@ from backend.app.workers.feature_materialization import (
     materialize_partitioned_snapshot,
 )
 from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
-from backend.app.workers.local_artifacts import cached_artifact,task_checkpoint_dir,worker_data_root
+from backend.app.workers.local_artifacts import cached_artifact,promote_cached_artifact,task_checkpoint_dir,worker_data_root
 from quant_core.validation import benjamini_hochberg, mean_significance
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
 
@@ -137,6 +137,7 @@ def materialize_features(job_id:str):
         digest=sha256_file(result.output_path)
         _progress(jid,94)
         uri=upload_file(f"data/features/{snap.id}/{digest[:12]}.parquet",result.output_path,"application/vnd.apache.parquet")
+        promote_cached_artifact(result.output_path,digest)
         definitions_snapshot=[{"id":str(d.id),"slug":d.slug,"version":d.version,"implementation":d.implementation,"parameters":d.parameters} for d in definitions]
         with SyncSessionFactory() as s:
             row_count=result.row_count
@@ -220,10 +221,10 @@ def research_factors(job_id:str):
         snapshot=s.get(FeatureSnapshot,run.snapshot_id);version=s.get(DataVersion,snapshot.data_version_id)
         mark_running(job);run.status="running";s.commit()
     try:
-        feature_frame=pd.read_parquet(io.BytesIO(download_bytes(snapshot.artifact_uri)))
+        feature_frame=pd.read_parquet(cached_artifact(snapshot.artifact_uri,snapshot.content_sha256))
         if "universe_member" in feature_frame.columns:
             feature_frame=feature_frame[feature_frame["universe_member"].fillna(False)].copy()
-        market_frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri)))
+        market_frame=pd.read_parquet(cached_artifact(version.artifact_uri,version.content_sha256))
         feature_slugs=[item["slug"] for item in snapshot.lineage.get("definitions",[])]
         missing=[slug for slug in feature_slugs if slug not in feature_frame.columns]
         if missing:raise ValueError(f"Snapshot is missing factor columns: {', '.join(missing)}")

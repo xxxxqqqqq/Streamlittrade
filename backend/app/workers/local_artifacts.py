@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 from backend.app.core.config import get_settings
@@ -29,6 +31,29 @@ def cached_artifact(uri: str, expected_sha256: str | None, suffix: str = ".parqu
     if expected_sha256 and sha256_file(target) != expected_sha256:
         target.unlink(missing_ok=True)
         raise ValueError("Downloaded artifact SHA-256 does not match its immutable data version")
+    return target
+
+
+def promote_cached_artifact(
+    source: str | Path,
+    expected_sha256: str,
+    suffix: str = ".parquet",
+) -> Path:
+    """Make a verified generated artifact immediately reusable by later jobs."""
+
+    source_path = Path(source)
+    if sha256_file(source_path) != expected_sha256:
+        raise ValueError("Generated artifact SHA-256 changed before cache promotion")
+    target = worker_data_root() / "cache" / f"{expected_sha256}{suffix}"
+    if target.exists() and sha256_file(target) == expected_sha256:
+        return target
+    temporary = target.with_name(f".{target.name}.partial")
+    temporary.unlink(missing_ok=True)
+    try:
+        os.link(source_path, temporary)
+    except OSError:
+        shutil.copy2(source_path, temporary)
+    temporary.replace(target)
     return target
 
 

@@ -74,11 +74,11 @@ QUANT_WORKER_NAME=laptop-worker-01
 启动和检查：
 
 ```powershell
-.\scripts\compute_worker.ps1 validate-config
-.\scripts\compute_worker.ps1 build
-.\scripts\compute_worker.ps1 start
-.\scripts\compute_worker.ps1 status
-.\scripts\compute_worker.ps1 logs
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 validate-config
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 build
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 start
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 status
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 logs
 ```
 
 依次验证 1～3、12、36、87 因子。任务详情必须显示 `quant-heavy` 和 `laptop-worker-01`；第二次相同输入应命中缓存，恢复任务应出现 `resumed_partitions > 0`。
@@ -98,7 +98,7 @@ QUANT_CLOUD_WORKER_QUEUES=quant-light,quant-backtests
 
 ### 只回滚路由（优先）
 
-1. 停止笔记本 Worker：`.\scripts\compute_worker.ps1 stop`。
+1. 停止笔记本 Worker：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compute_worker.ps1 stop`。
 2. 云端设置 `QUANT_QUEUE_MODE=legacy`、`QUANT_CLOUD_WORKER_QUEUES=quant-backtests`。
 3. 重启 API 和云 Worker。
 4. 未开始任务继续留在旧队列；已中断任务明确失败后可重试，检查点保留。

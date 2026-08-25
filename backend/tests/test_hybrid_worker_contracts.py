@@ -1,9 +1,11 @@
 """Contracts for reversible queue routing and bounded factor materialization."""
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pandas as pd
@@ -13,6 +15,7 @@ from backend.app.workers.feature_materialization import (
     definition_fingerprint,
     materialize_partitioned_snapshot,
 )
+from backend.app.workers.local_artifacts import promote_cached_artifact
 
 
 class HybridQueueRoutingTests(unittest.TestCase):
@@ -144,6 +147,21 @@ class PartitionedMaterializationTests(unittest.TestCase):
             self.assertEqual(resumed.resumed_partitions, 1)
             self.assertEqual(resumed.computed_partitions, 1)
             self.assertEqual(resumed.row_count, len(self.frame))
+
+    def test_generated_artifact_is_promoted_to_verified_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            source = root / "staging.parquet"
+            source.write_bytes(b"immutable-parquet-placeholder")
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            with patch(
+                "backend.app.workers.local_artifacts.worker_data_root",
+                return_value=root,
+            ):
+                cached = promote_cached_artifact(source, digest)
+                self.assertEqual(cached, root / "cache" / f"{digest}.parquet")
+                self.assertEqual(cached.read_bytes(), source.read_bytes())
 
 
 if __name__ == "__main__":
