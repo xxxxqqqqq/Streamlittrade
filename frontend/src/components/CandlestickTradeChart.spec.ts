@@ -1,5 +1,6 @@
 import {mount} from '@vue/test-utils'
 import {describe,expect,it} from 'vitest'
+import {nextTick} from 'vue'
 import CandlestickTradeChart from './CandlestickTradeChart.vue'
 
 describe('CandlestickTradeChart',()=>{
@@ -23,7 +24,8 @@ describe('CandlestickTradeChart',()=>{
     const chart=wrapper.find('svg')
     Object.defineProperty(chart.element,'getBoundingClientRect',{value:()=>({left:0,width:1000})})
     expect(chart.attributes('data-window-size')).toBe('80')
-    await chart.trigger('wheel',{deltaY:-1,clientX:500})
+    chart.element.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-1,clientX:500}))
+    await nextTick()
     expect(Number(chart.attributes('data-window-size'))).toBeLessThan(80)
     expect(Number(chart.attributes('data-window-start'))).toBeGreaterThanOrEqual(0)
   })
