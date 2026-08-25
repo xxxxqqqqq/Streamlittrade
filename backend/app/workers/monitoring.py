@@ -14,6 +14,7 @@ from backend.app.models.job import Job
 from backend.app.models.operations import AlertEvent, DriftRun
 from backend.app.models.research import ModelVersion
 from quant_core.monitoring import population_stability_index, standardized_mean_shift
+from backend.app.workers.lifecycle import mark_finished,mark_running
 
 
 def _fail(job_id: UUID, run_id: UUID, message: str) -> None:
@@ -22,8 +23,7 @@ def _fail(job_id: UUID, run_id: UUID, message: str) -> None:
         if job:
             job.status = "failed"
             job.error_message = message[:2000]
-            job.completed_at = datetime.now(UTC)
-            job.lease_expires_at = None
+            mark_finished(job)
         if run:
             run.status = "failed"
             run.error_message = message[:2000]
@@ -53,9 +53,7 @@ def run_drift_monitor(job_id: str) -> dict:
             or current.project_id != job.project_id
         ):
             raise PermissionError("Drift monitoring resources cross project boundary")
-        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
-        job.attempt += 1
-        job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        mark_running(job,10)
         run.status = "running"
         session.commit()
         run_id = run.id
@@ -147,8 +145,7 @@ def run_drift_monitor(job_id: str) -> dict:
                 "max_feature_psi": metrics["max_feature_psi"],
                 "score_psi": metrics["score_psi"],
             }
-            job.completed_at = datetime.now(UTC)
-            job.lease_expires_at = None
+            mark_finished(job)
             if level != "none":
                 session.add(
                     AlertEvent(

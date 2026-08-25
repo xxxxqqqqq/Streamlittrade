@@ -94,6 +94,7 @@ class JobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID; kind: str; status: str; progress: float; result_summary: dict[str, Any] | None
     error_message: str | None; created_at: datetime; started_at: datetime | None; completed_at: datetime | None
+    queue_name: str | None = None; worker_name: str | None = None; worker_heartbeat_at: datetime | None = None
 
 
 class BacktestRead(BaseModel):

@@ -5,6 +5,7 @@
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,26 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://quant:quant_dev_password@localhost:5432/quant"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Queue routing keeps the current single-queue deployment available as a
+    # rollback path while allowing CPU/memory-heavy jobs to run on a remote
+    # compute worker.  Production switches to ``split`` only after the remote
+    # worker is healthy.
+    queue_mode: str = "legacy"
+    legacy_queue_name: str = "quant-backtests"
+    light_queue_name: str = "quant-light"
+    heavy_queue_name: str = "quant-heavy"
+    worker_queues: str = ""
+    worker_name: str = ""
+    light_job_timeout_seconds: int = 3600
+    heavy_job_timeout_seconds: int = 28800
+    worker_lease_seconds: int = 1800
+
+    # Remote workers keep immutable inputs and resumable factor partitions on
+    # local SSD.  Nothing in this directory is authoritative until its hash is
+    # verified and the final artifact is committed in PostgreSQL/MinIO.
+    worker_data_dir: Path = Path(".worker-data")
+    object_storage_retry_attempts: int = 5
+
     object_storage_endpoint: str = "http://localhost:9000"
     object_storage_access_key: str = "quant_local"
     object_storage_secret_key: SecretStr = SecretStr("change_this_local_secret")
@@ -43,6 +64,17 @@ class Settings(BaseSettings):
     refresh_token_days: int = 30
     bootstrap_admin_email: str = "admin@quant.local"
     bootstrap_admin_password: SecretStr = SecretStr("quant-dev-admin")
+
+    @property
+    def worker_queue_names(self) -> list[str]:
+        """Resolve the queues consumed by this process without hidden magic."""
+
+        configured = [item.strip() for item in self.worker_queues.split(",") if item.strip()]
+        if configured:
+            return configured
+        if self.queue_mode == "split":
+            return [self.heavy_queue_name]
+        return [self.legacy_queue_name]
 
 
 @lru_cache

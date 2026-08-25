@@ -17,10 +17,12 @@ RUN python -m pip install --index-url "$PIP_INDEX_URL" \
 COPY backend ./backend
 COPY quant_core ./quant_core
 COPY strategies.py ./strategies.py
+COPY scripts/benchmark_feature_materialization.py ./scripts/benchmark_feature_materialization.py
 
-RUN groupadd --system worker \
-    && useradd --system --gid worker --create-home worker \
-    && chown -R worker:worker /app
+RUN groupadd --gid 10001 worker \
+    && useradd --uid 10001 --gid worker --create-home worker \
+    && mkdir -p /var/lib/quantforge-worker \
+    && chown -R worker:worker /app /var/lib/quantforge-worker
 
 USER worker
 

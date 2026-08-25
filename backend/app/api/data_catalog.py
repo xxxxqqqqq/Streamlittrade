@@ -90,6 +90,13 @@ async def materialize(body:MaterializeCreate,session:AsyncSession=Depends(get_db
     ids=[str(x) for x in body.feature_definition_ids]
     found=(await session.scalars(select(FeatureDefinition).where(FeatureDefinition.id.in_(body.feature_definition_ids),FeatureDefinition.status=="active"))).all()
     if len(found)!=len(set(ids)):raise HTTPException(409,"one or more active feature definitions were not found")
+    slugs=[item.slug for item in found]
+    duplicate_slugs=sorted({slug for slug in slugs if slugs.count(slug)>1})
+    if duplicate_slugs:
+        raise HTTPException(
+            409,
+            "select only one version of each factor: " + ", ".join(duplicate_slugs),
+        )
     jid,sid=uuid4(),uuid4();job=Job(id=jid,owner_id=context.user.id,project_id=context.project.id,kind="feature_materialize",status="queued",progress=0,payload={"snapshot_id":str(sid)});snap=FeatureSnapshot(id=sid,project_id=context.project.id,data_version_id=version.id,job_id=jid,name=body.name,status="queued",feature_definition_ids=ids,lineage={"data_version_id":str(version.id)})
     session.add(job);await session.flush();session.add(snap);add_outbox(session,job,"backend.app.workers.data_catalog.materialize_features");await session.commit()
     return CatalogSubmission(job_id=jid,resource_id=sid)

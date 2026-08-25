@@ -4,6 +4,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 .env
+.env.worker
+.worker-data/
 backend/.env
 debug.log
 signal_log.json

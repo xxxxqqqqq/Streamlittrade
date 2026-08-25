@@ -1,0 +1,31 @@
+services:
+  secure-tunnel:
+    image: quantforge-ssh-tunnel:local
+    build:
+      context: .
+      dockerfile: worker/ssh-tunnel.Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      SSH_HOST: "${SSH_HOST}"
+      SSH_USER: "${SSH_USER:-root}"
+      LOCAL_POSTGRES_PORT: "15432"
+      LOCAL_REDIS_PORT: "16379"
+      LOCAL_MINIO_PORT: "19000"
+      REMOTE_POSTGRES_PORT: "${CLOUD_POSTGRES_TUNNEL_PORT:-15432}"
+      REMOTE_REDIS_PORT: "${CLOUD_REDIS_TUNNEL_PORT:-16379}"
+      REMOTE_MINIO_PORT: "${CLOUD_MINIO_TUNNEL_PORT:-19000}"
+    volumes:
+      - "${SSH_PRIVATE_KEY_PATH}:/run/secrets/worker_ssh_key:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 15432 && nc -z 127.0.0.1 16379 && nc -z 127.0.0.1 19000"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+
+  compute-worker:
+    depends_on:
+      secure-tunnel:
+        condition: service_healthy

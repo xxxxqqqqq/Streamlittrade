@@ -25,10 +25,7 @@ from quant_core import fetch_stock_data, generate_demo_stock_data
 from quant_core.ml import FEATURES, build_training_frame, cross_sectional_rank_features, economic_metrics, three_way_research_split
 from quant_core.validation import fit_time_ordered_sigmoid, probability_diagnostics
 from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
-
-
-class TaskCanceled(RuntimeError):
-    """Raised at a safe cancellation checkpoint."""
+from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
 
 
 def _build_estimator(algorithm: str, parameters: dict):
@@ -62,11 +59,13 @@ def _prepare_model_features(
 def _check_cancel(job_id: UUID) -> None:
     with SyncSessionFactory() as session:
         job = session.get(Job, job_id)
-        if job and job.status == "cancel_requested":
-            job.status = "canceled"
-            job.completed_at = datetime.now(UTC)
+        if job:
+            try:
+                heartbeat(job)
+            except TaskCanceled:
+                session.commit()
+                raise
             session.commit()
-            raise TaskCanceled("Task canceled by user")
 
 
 def _fail(job_id: UUID, entity, message: str) -> None:
@@ -76,8 +75,7 @@ def _fail(job_id: UUID, entity, message: str) -> None:
         if job:
             job.status = "canceled" if job.status in {"cancel_requested", "canceled"} else "failed"
             job.error_message = message[:2000]
-            job.completed_at = datetime.now(UTC)
-            job.lease_expires_at = None
+            mark_finished(job)
         if record:
             record.status = "failed"
             record.error_message = message[:2000]
@@ -91,8 +89,7 @@ def build_dataset(job_id: str) -> dict:
         dataset = session.get(Dataset, UUID(job.payload["dataset_id"])) if job else None
         if not job or not dataset:
             raise LookupError("Dataset task does not exist")
-        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
-        job.attempt += 1; job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        mark_running(job,10)
         dataset.status = "running"
         session.commit()
         spec = dict(dataset.specification)
@@ -159,7 +156,7 @@ def build_dataset(job_id: str) -> dict:
             record.artifact_uri, record.metadata_snapshot = uri, metadata
             job.status, job.progress = "succeeded", 100
             job.result_summary = {"dataset_id": str(record.id), "rows": len(result), "content_sha256": content_hash}
-            job.completed_at = datetime.now(UTC); job.lease_expires_at = None
+            mark_finished(job)
             session.commit()
         return {"dataset_id": str(dataset.id), "artifact_uri": uri, "content_sha256": content_hash}
     except Exception as exc:
@@ -245,8 +242,7 @@ def train_experiment(job_id: str) -> dict:
         dataset = session.get(Dataset, experiment.dataset_id) if experiment else None
         if not job or not experiment or not dataset or dataset.status != "ready":
             raise LookupError("Experiment or ready dataset does not exist")
-        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
-        job.attempt += 1; job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        mark_running(job,10)
         experiment.status = "running"
         session.commit()
         uri, params, algorithm, exp_id = dataset.artifact_uri, dict(experiment.parameters), experiment.algorithm, experiment.id
@@ -376,7 +372,7 @@ def train_experiment(job_id: str) -> dict:
             ))
             job.status, job.progress = "succeeded", 100
             job.result_summary = {"experiment_id": str(exp_id), "model_id": str(model_id), **{k: v for k, v in metrics.items() if not isinstance(v, list)}}
-            job.completed_at = datetime.now(UTC); job.lease_expires_at = None
+            mark_finished(job)
             session.commit()
         return {"model_id": str(model_id), "metrics": metrics}
     except Exception as exc:
@@ -395,8 +391,7 @@ def evaluate_sealed_model(job_id: str) -> dict:
         dataset = session.get(Dataset, evaluation.dataset_id) if evaluation else None
         if not job or not evaluation or not model or not experiment or not dataset or dataset.status != "ready":
             raise LookupError("Sealed evaluation resources do not exist")
-        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
-        job.attempt += 1; job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        mark_running(job,10)
         evaluation.status = "running"
         session.commit()
         evaluation_id = evaluation.id
@@ -465,7 +460,7 @@ def evaluate_sealed_model(job_id: str) -> dict:
             }
             job.status, job.progress = "succeeded", 100
             job.result_summary = {"sealed_evaluation_id": str(record.id), "model_id": str(model.id), **metrics}
-            job.completed_at = datetime.now(UTC); job.lease_expires_at = None
+            mark_finished(job)
             session.commit()
         return job.result_summary
     except Exception as exc:
@@ -490,8 +485,7 @@ def run_batch_prediction(job_id: str) -> dict:
             or experiment.project_id!=job.project_id
         ):
             raise PermissionError("Prediction resources cross project boundary")
-        job.status,job.progress,job.started_at="running",10,datetime.now(UTC)
-        job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15)
+        mark_running(job,10)
         prediction.status="running"
         session.commit()
         model_uri,snapshot_uri=model.artifact_uri,snapshot.artifact_uri
@@ -547,7 +541,7 @@ def run_batch_prediction(job_id: str) -> dict:
             current_job=session.get(Job,jid);current=session.get(PredictionRun,prediction_id)
             current.status="succeeded";current.artifact_uri=artifact_uri;current.row_count=len(output);current.summary=summary
             current_job.status="succeeded";current_job.progress=100;current_job.result_summary=summary
-            current_job.completed_at=datetime.now(UTC);current_job.lease_expires_at=None
+            mark_finished(current_job)
             session.commit()
         return summary
     except Exception as exc:

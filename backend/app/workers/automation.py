@@ -17,6 +17,7 @@ from backend.app.models.operations import PaperAutomationRun, PaperAutomationSch
 from backend.app.models.paper import PaperAccount, PaperOrder, PaperPosition
 from backend.app.models.research import ModelVersion
 from backend.app.services.paper_automation import build_target_portfolio, next_business_day
+from backend.app.workers.lifecycle import mark_finished,mark_running
 
 
 def run_paper_automation(job_id: str) -> dict:
@@ -36,9 +37,7 @@ def run_paper_automation(job_id: str) -> dict:
             raise PermissionError("Paper automation resources cross project boundary")
         if account.status != "active" or model.stage != "production" or snapshot.status != "ready" or version.status != "ready":
             raise ValueError("Paper automation requires active account, production model and ready immutable data")
-        job.status, job.progress, job.started_at = "running", 10, datetime.now(UTC)
-        job.attempt += 1
-        job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        mark_running(job,10)
         run.status = "running"
         session.commit()
         run_id, owner_id, account_id = run.id, schedule.owner_id, account.id
@@ -102,7 +101,7 @@ def run_paper_automation(job_id: str) -> dict:
             current_run.signals, current_run.targets, current_run.order_ids, current_run.lineage = signals[:100], targets, order_ids, lineage
             summary = {"run_id": str(run_id), "signal_date": signal_date.isoformat(), "intended_trade_date": trade_date.isoformat(), "selected": len(targets), "proposed_orders": len(order_ids)}
             current_job.status, current_job.progress, current_job.result_summary = "succeeded", 100, summary
-            current_job.completed_at, current_job.lease_expires_at = datetime.now(UTC), None
+            mark_finished(current_job)
             session.add(AuditLog(actor_id=owner_id, action="paper_automation.proposed", resource_type="paper_automation_run", resource_id=str(run_id), details=summary))
             session.commit()
         return summary
@@ -110,7 +109,8 @@ def run_paper_automation(job_id: str) -> dict:
         with SyncSessionFactory() as session:
             current_job, current_run = session.get(Job, jid), session.get(PaperAutomationRun, run_id)
             if current_job:
-                current_job.status, current_job.error_message, current_job.completed_at, current_job.lease_expires_at = "failed", str(exc), datetime.now(UTC), None
+                current_job.status, current_job.error_message = "failed", str(exc)
+                mark_finished(current_job)
             if current_run:
                 current_run.status, current_run.error_message = "failed", str(exc)
             session.commit()

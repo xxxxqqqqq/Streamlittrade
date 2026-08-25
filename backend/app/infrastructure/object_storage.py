@@ -1,6 +1,9 @@
 """MinIO/阿里云OSS兼容对象存储适配器。"""
 
+import hashlib
 from io import BytesIO
+from pathlib import Path
+import time
 from urllib.parse import urlsplit
 
 from minio import Minio
@@ -23,19 +26,63 @@ def _create_client() -> Minio:
 object_storage = _create_client()
 
 
+def _bucket_and_name(uri: str) -> tuple[str, str]:
+    prefix = "s3://"
+    if not uri.startswith(prefix):
+        raise ValueError("仅支持s3://产物地址")
+    return tuple(uri[len(prefix):].split("/", 1))  # type: ignore[return-value]
+
+
+def _retry(operation):
+    attempts = max(1, get_settings().object_storage_retry_attempts)
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except Exception:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(min(8.0, 0.5 * (2**attempt)))
+
+
+def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def upload_bytes(object_name: str, content: bytes, content_type: str) -> str:
     """上传任意二进制产物并返回稳定的S3 URI。"""
     bucket = get_settings().object_storage_bucket
-    if not object_storage.bucket_exists(bucket):
-        # minio-init通常已经建桶；这里仍保留幂等兜底以提高Worker可恢复性。
-        object_storage.make_bucket(bucket)
-    object_storage.put_object(
-        bucket,
-        object_name,
-        BytesIO(content),
-        length=len(content),
-        content_type=content_type,
-    )
+
+    def operation():
+        if not object_storage.bucket_exists(bucket):
+            # minio-init通常已经建桶；这里仍保留幂等兜底以提高Worker可恢复性。
+            object_storage.make_bucket(bucket)
+        object_storage.put_object(
+            bucket,
+            object_name,
+            BytesIO(content),
+            length=len(content),
+            content_type=content_type,
+        )
+
+    _retry(operation)
+    return f"s3://{bucket}/{object_name}"
+
+
+def upload_file(object_name: str, path: str | Path, content_type: str) -> str:
+    """Stream a local file to object storage without duplicating it in RAM."""
+
+    bucket = get_settings().object_storage_bucket
+
+    def operation():
+        if not object_storage.bucket_exists(bucket):
+            object_storage.make_bucket(bucket)
+        object_storage.fput_object(bucket, object_name, str(path), content_type=content_type)
+
+    _retry(operation)
     return f"s3://{bucket}/{object_name}"
 
 
@@ -45,12 +92,29 @@ def upload_json(object_name: str, content: bytes) -> str:
 
 def download_bytes(uri: str) -> bytes:
     """读取平台自身生成的S3 URI。"""
-    prefix = "s3://"
-    if not uri.startswith(prefix):
-        raise ValueError("仅支持s3://产物地址")
-    bucket, object_name = uri[len(prefix):].split("/", 1)
-    response = object_storage.get_object(bucket, object_name)
-    try:
-        return response.read()
-    finally:
-        response.close(); response.release_conn()
+    bucket, object_name = _bucket_and_name(uri)
+    def operation():
+        response = object_storage.get_object(bucket, object_name)
+        try:
+            return response.read()
+        finally:
+            response.close(); response.release_conn()
+
+    return _retry(operation)
+
+
+def download_file(uri: str, destination: str | Path) -> Path:
+    """Download atomically to local SSD so interrupted transfers are harmless."""
+
+    bucket, object_name = _bucket_and_name(uri)
+    target = Path(destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.partial")
+
+    def operation():
+        partial.unlink(missing_ok=True)
+        object_storage.fget_object(bucket, object_name, str(partial))
+
+    _retry(operation)
+    partial.replace(target)
+    return target

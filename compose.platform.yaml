@@ -39,6 +39,12 @@ services:
       QUANT_APP_ENV: development
       QUANT_DATABASE_URL: postgresql+psycopg://quant:${POSTGRES_PASSWORD:-quant_dev_password}@postgres:5432/quant
       QUANT_REDIS_URL: redis://redis:6379/0
+      QUANT_QUEUE_MODE: "${QUANT_QUEUE_MODE:-legacy}"
+      QUANT_LEGACY_QUEUE_NAME: "${QUANT_LEGACY_QUEUE_NAME:-quant-backtests}"
+      QUANT_LIGHT_QUEUE_NAME: "${QUANT_LIGHT_QUEUE_NAME:-quant-light}"
+      QUANT_HEAVY_QUEUE_NAME: "${QUANT_HEAVY_QUEUE_NAME:-quant-heavy}"
+      QUANT_LIGHT_JOB_TIMEOUT_SECONDS: "${QUANT_LIGHT_JOB_TIMEOUT_SECONDS:-3600}"
+      QUANT_HEAVY_JOB_TIMEOUT_SECONDS: "${QUANT_HEAVY_JOB_TIMEOUT_SECONDS:-28800}"
       QUANT_OBJECT_STORAGE_ENDPOINT: http://minio:9000
       QUANT_OBJECT_STORAGE_ACCESS_KEY: "${MINIO_ROOT_USER:-quant_local}"
       QUANT_OBJECT_STORAGE_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
@@ -67,6 +73,17 @@ services:
       QUANT_APP_ENV: development
       QUANT_DATABASE_URL: postgresql+psycopg://quant:${POSTGRES_PASSWORD:-quant_dev_password}@postgres:5432/quant
       QUANT_REDIS_URL: redis://redis:6379/0
+      QUANT_QUEUE_MODE: "${QUANT_QUEUE_MODE:-legacy}"
+      QUANT_LEGACY_QUEUE_NAME: "${QUANT_LEGACY_QUEUE_NAME:-quant-backtests}"
+      QUANT_LIGHT_QUEUE_NAME: "${QUANT_LIGHT_QUEUE_NAME:-quant-light}"
+      QUANT_HEAVY_QUEUE_NAME: "${QUANT_HEAVY_QUEUE_NAME:-quant-heavy}"
+      QUANT_WORKER_QUEUES: "${QUANT_CLOUD_WORKER_QUEUES:-quant-backtests}"
+      QUANT_WORKER_NAME: "${QUANT_CLOUD_WORKER_NAME:-cloud-worker-01}"
+      QUANT_LIGHT_JOB_TIMEOUT_SECONDS: "${QUANT_LIGHT_JOB_TIMEOUT_SECONDS:-3600}"
+      QUANT_HEAVY_JOB_TIMEOUT_SECONDS: "${QUANT_HEAVY_JOB_TIMEOUT_SECONDS:-28800}"
+      QUANT_WORKER_LEASE_SECONDS: "${QUANT_WORKER_LEASE_SECONDS:-1800}"
+      QUANT_WORKER_DATA_DIR: /var/lib/quantforge-worker
+      QUANT_OBJECT_STORAGE_RETRY_ATTEMPTS: "${QUANT_OBJECT_STORAGE_RETRY_ATTEMPTS:-5}"
       QUANT_OBJECT_STORAGE_ENDPOINT: http://minio:9000
       QUANT_OBJECT_STORAGE_ACCESS_KEY: "${MINIO_ROOT_USER:-quant_local}"
       QUANT_OBJECT_STORAGE_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-change_this_local_secret}"
@@ -78,6 +95,8 @@ services:
         condition: service_completed_successfully
     security_opt:
       - no-new-privileges:true
+    volumes:
+      - worker-data:/var/lib/quantforge-worker
 
   postgres:
     image: postgres:17-alpine
@@ -142,3 +161,4 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  worker-data:

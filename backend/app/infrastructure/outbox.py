@@ -5,11 +5,13 @@ from datetime import UTC,datetime,timedelta
 from uuid import UUID
 from sqlalchemy import select
 from backend.app.db.sync_session import SyncSessionFactory
-from backend.app.infrastructure.queue import enqueue_task
+from backend.app.infrastructure.queue import enqueue_task,queue_name_for_task
 from backend.app.models.job import Job,OutboxEvent
 
 def add_outbox(session,job:Job,function_path:str)->OutboxEvent:
-    event=OutboxEvent(job_id=job.id,function_path=function_path,status="pending",attempts=0,available_at=datetime.now(UTC))
+    queue_name=queue_name_for_task(function_path)
+    job.queue_name=queue_name
+    event=OutboxEvent(job_id=job.id,function_path=function_path,queue_name=queue_name,status="pending",attempts=0,available_at=datetime.now(UTC))
     session.add(event);return event
 
 def dispatch_pending(limit:int=50)->int:
@@ -18,7 +20,7 @@ def dispatch_pending(limit:int=50)->int:
         events=list(session.scalars(select(OutboxEvent).where(OutboxEvent.status=="pending",OutboxEvent.available_at<=datetime.now(UTC)).order_by(OutboxEvent.created_at).limit(limit).with_for_update(skip_locked=True)).all())
         for event in events:
             try:
-                enqueue_task(event.job_id,event.function_path)
+                enqueue_task(event.job_id,event.function_path,event.queue_name or None)
                 event.status="dispatched";event.dispatched_at=datetime.now(UTC);event.last_error=None;dispatched+=1
             except Exception as exc:
                 event.attempts+=1;event.last_error=str(exc)[:1000];event.available_at=datetime.now(UTC)+timedelta(seconds=min(300,2**event.attempts))

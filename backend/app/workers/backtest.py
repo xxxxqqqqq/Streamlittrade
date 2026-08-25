@@ -20,15 +20,12 @@ from backend.app.models.job import Job
 from backend.app.models.research import Experiment, ModelVersion, SealedEvaluation
 from backend.app.services.model_backtest_gate import prediction_window
 from backend.app.infrastructure.object_storage import download_bytes
+from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
 import io
 from quant_core import (
     build_model_signal_frames, fetch_stock_data, generate_demo_stock_data, resolve_strategy, run_backtest,
     run_portfolio_backtest, validate_market_dataset,
 )
-
-
-class TaskCanceled(RuntimeError):
-    pass
 
 
 def _json_safe(value: Any) -> Any:
@@ -44,11 +41,13 @@ def _json_safe(value: Any) -> Any:
 def _set_progress(job_id: UUID, progress: float) -> None:
     with SyncSessionFactory() as session:
         current = session.get(Job, job_id)
-        if current and current.status == "cancel_requested":
-            current.status, current.completed_at = "canceled", datetime.now(UTC)
-            session.commit(); raise TaskCanceled("Task canceled by user")
         if current:
-            current.progress = progress; session.commit()
+            try:
+                heartbeat(current,progress)
+            except TaskCanceled:
+                session.commit()
+                raise
+            session.commit()
 
 
 def _load_symbol(payload: dict[str, Any], symbol: str, seed: int = 42) -> pd.DataFrame:
@@ -257,9 +256,7 @@ def execute_backtest(job_id: str) -> dict[str, Any]:
             job = session.get(Job, parsed_id)
             run = session.scalar(select(BacktestRun).where(BacktestRun.job_id == parsed_id))
             if not job or not run: raise LookupError(f"Backtest job {job_id} does not exist")
-            job.status, job.progress, job.started_at, job.error_message = "running", 5.0, datetime.now(UTC), None
-            job.attempt += 1
-            job.lease_expires_at = datetime.now(UTC) + timedelta(minutes=15)
+            mark_running(job,5.0)
             session.commit(); payload, run_id = dict(job.payload), run.id
         _set_progress(parsed_id, 20)
         if payload.get("run_type", "single") == "portfolio":
@@ -300,8 +297,7 @@ def execute_backtest(job_id: str) -> dict[str, Any]:
             if not current_job or not current_run: raise LookupError("Backtest record disappeared")
             current_run.metrics, current_run.data_quality, current_run.artifact_uri = safe_metrics, safe_audit["data_quality"], artifact_uri
             current_job.status, current_job.progress, current_job.result_summary = "succeeded", 100, safe_metrics
-            current_job.completed_at = datetime.now(UTC)
-            current_job.lease_expires_at = None
+            mark_finished(current_job)
             session.commit()
         return {"backtest_id": str(run_id), "artifact_uri": artifact_uri, "metrics": safe_metrics}
     except Exception as exc:
@@ -309,7 +305,7 @@ def execute_backtest(job_id: str) -> dict[str, Any]:
             failed = session.get(Job, parsed_id)
             if failed:
                 failed.status = "canceled" if failed.status in {"cancel_requested","canceled"} else "failed"
-                failed.completed_at, failed.error_message = datetime.now(UTC), str(exc)[:2000]
-                failed.lease_expires_at = None
+                failed.error_message = str(exc)[:2000]
+                mark_finished(failed)
                 session.commit()
         raise

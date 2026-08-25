@@ -7,22 +7,30 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import select
 from backend.app.db.sync_session import SyncSessionFactory
-from backend.app.infrastructure.object_storage import download_bytes,upload_bytes
+from backend.app.infrastructure.object_storage import download_bytes,upload_bytes,upload_file,sha256_file
 from backend.app.models.data_catalog import DataSource,DataVersion,FactorResearchRun,FeatureDefinition,FeatureSnapshot
 from backend.app.models.job import Job
 from backend.app.services.factors import compute_factor
 from backend.app.services.research_gates import factor_training_dates
 from backend.app.services.universe import apply_dynamic_universe
+from backend.app.workers.feature_materialization import (
+    PIPELINE_VERSION,
+    definition_fingerprint,
+    materialize_partitioned_snapshot,
+)
+from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
+from backend.app.workers.local_artifacts import cached_artifact,task_checkpoint_dir,worker_data_root
 from quant_core.validation import benjamini_hochberg, mean_significance
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
 
 def _progress(jid,value):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid)
-        if job and job.status=="cancel_requested":job.status="canceled";job.completed_at=datetime.now(UTC);s.commit();raise RuntimeError("Task canceled")
+        if job and job.status=="cancel_requested":
+            job.status="canceled";job.completed_at=datetime.now(UTC);job.lease_expires_at=None
+            s.commit();raise TaskCanceled("Task canceled by user")
         if job:
-            job.progress=value
-            job.lease_expires_at=datetime.now(UTC)+timedelta(hours=1)
+            heartbeat(job,value)
             s.commit()
 def _parquet(frame):
     out=io.BytesIO();frame.to_parquet(out,index=False);return out.getvalue()
@@ -31,7 +39,8 @@ def _parquet(frame):
 def _fail(jid,message,records=()):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid)
-        if job:job.status="failed";job.error_message=message[:2000];job.completed_at=datetime.now(UTC);job.lease_expires_at=None
+        if job:
+            job.status="canceled" if job.status in {"cancel_requested","canceled"} else "failed";job.error_message=message[:2000];mark_finished(job)
         for cls,rid in records:
             item=s.get(cls,rid)
             if item:item.status="failed";item.error_message=message[:2000]
@@ -41,7 +50,7 @@ def sync_data(job_id:str):
     jid=UUID(job_id)
     with SyncSessionFactory() as s:
         job=s.get(Job,jid);payload=dict(job.payload);raw=s.get(DataVersion,UUID(payload["raw_version_id"]));standard=s.get(DataVersion,UUID(payload["standard_version_id"]));source=s.get(DataSource,raw.source_id)
-        job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15);raw.status=standard.status="running";s.commit()
+        mark_running(job);raw.status=standard.status="running";s.commit()
     try:
         frames={}
         start,end=pd.Timestamp(payload["start_date"]).date(),pd.Timestamp(payload["end_date"]).date()
@@ -69,7 +78,7 @@ def sync_data(job_id:str):
             r.status="ready";r.artifact_uri=raw_uri;r.content_sha256=raw_hash;r.row_count=len(raw_frame);r.quality_report={"raw_preserved":True};r.lineage={"provider":source.provider,"source_slug":source.slug,"ingested_at":datetime.now(UTC).isoformat()}
             quality={**report.to_dict(),"dynamic_universe":universe_report}
             v.status="ready";v.artifact_uri=standard_uri;v.content_sha256=standard_hash;v.row_count=len(standard_frame);v.quality_report=quality;v.lineage={"parent_id":str(r.id),"parent_sha256":raw_hash,"transform":"canonical_market_v2","dynamic_universe":universe_report}
-            job.status="succeeded";job.progress=100;job.result_summary={"raw_version_id":str(r.id),"standard_version_id":str(v.id),"rows":len(standard_frame),"content_sha256":standard_hash};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
+            job.status="succeeded";job.progress=100;job.result_summary={"raw_version_id":str(r.id),"standard_version_id":str(v.id),"rows":len(standard_frame),"content_sha256":standard_hash};mark_finished(job);s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(DataVersion,raw.id),(DataVersion,standard.id)]);raise
 
@@ -108,40 +117,30 @@ def materialize_features(job_id:str):
     jid=UUID(job_id)
     with SyncSessionFactory() as s:
         job=s.get(Job,jid);snap=s.get(FeatureSnapshot,UUID(job.payload["snapshot_id"]));version=s.get(DataVersion,snap.data_version_id)
-        definitions=list(s.scalars(select(FeatureDefinition).where(FeatureDefinition.id.in_([UUID(x) for x in snap.feature_definition_ids]))).all())
-        job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1;job.lease_expires_at=datetime.now(UTC)+timedelta(hours=1);snap.status="running";s.commit()
+        definition_ids=[UUID(x) for x in snap.feature_definition_ids]
+        loaded=list(s.scalars(select(FeatureDefinition).where(FeatureDefinition.id.in_(definition_ids))).all())
+        by_id={item.id:item for item in loaded};definitions=[by_id[item] for item in definition_ids if item in by_id]
+        if len(definitions)!=len(definition_ids):raise LookupError("Feature snapshot references a missing definition")
+        mark_running(job);snap.status="running";s.commit()
     try:
-        frame=pd.read_parquet(io.BytesIO(download_bytes(version.artifact_uri))).sort_values(["symbol","date"])
-        non_finite_replacements={}
-        computed_columns={}
-        for index,definition in enumerate(definitions):
-            column,replaced=_compute_feature_column_with_diagnostics(frame, definition)
-            # Factor snapshots can contain hundreds of thousands of rows and
-            # many columns.  Float32 is ample for model inputs and halves the
-            # peak resident memory while the immutable snapshot is assembled.
-            computed_columns[definition.slug]=column.astype("float32")
-            non_finite_replacements[definition.slug]=replaced
-            if (index + 1) % 5 == 0 or index + 1 == len(definitions):
-                _progress(jid,10+int(65*(index+1)/len(definitions)))
-        feature_columns=[d.slug for d in definitions]
-        universe_columns=[column for column in ("universe_member","universe_rank") if column in frame.columns]
-        output_frame=pd.DataFrame(computed_columns,index=frame.index,copy=False)
-        for column in reversed(["date","symbol",*universe_columns]):
-            output_frame.insert(0,column,frame[column].to_numpy(copy=False))
-        del computed_columns
-        profile={"features":{},"date_min":str(pd.to_datetime(frame.date).min().date()),"date_max":str(pd.to_datetime(frame.date).max().date()),"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})}
-        for col in feature_columns:
-            values=output_frame[col];profile["features"][col]={"missing_rate":round(float(values.isna().mean()),6),"mean":_finite(values.mean()),"std":_finite(values.std()),"min":_finite(values.min()),"max":_finite(values.max()),"non_finite_replaced":non_finite_replacements[col]}
-        profile["warnings"]=[
-            {"code":"non_finite_replaced","feature":slug,"count":count,"message":"非有限因子值已转为空值"}
-            for slug,count in non_finite_replacements.items() if count
-        ]
-        del frame
-        payload=_parquet(output_frame);digest=hashlib.sha256(payload).hexdigest();uri=upload_bytes(f"data/features/{snap.id}/{digest[:12]}.parquet",payload,"application/vnd.apache.parquet")
+        if not version.artifact_uri:raise ValueError("Standardized data version has no artifact")
+        source_path=cached_artifact(version.artifact_uri,version.content_sha256)
+        fingerprint=definition_fingerprint(version.content_sha256 or sha256_file(source_path),definitions)
+        checkpoint_dir=task_checkpoint_dir(str(snap.id),fingerprint)
+        staging_dir=worker_data_root()/"staging"/str(snap.id);staging_dir.mkdir(parents=True,exist_ok=True)
+        output_path=staging_dir/f"{fingerprint[:24]}.parquet"
+        result=materialize_partitioned_snapshot(
+            source_path,output_path,checkpoint_dir,definitions,fingerprint,
+            dict((version.lineage or {}).get("dynamic_universe") or {}),
+            progress=lambda value:_progress(jid,value),
+        )
+        digest=sha256_file(result.output_path)
+        _progress(jid,94)
+        uri=upload_file(f"data/features/{snap.id}/{digest[:12]}.parquet",result.output_path,"application/vnd.apache.parquet")
         definitions_snapshot=[{"id":str(d.id),"slug":d.slug,"version":d.version,"implementation":d.implementation,"parameters":d.parameters} for d in definitions]
         with SyncSessionFactory() as s:
-            row_count=len(output_frame)
-            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=row_count;item.profile=profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":"feature_registry_v2","dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":row_count,"features":feature_columns,"content_sha256":digest};job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
+            row_count=result.row_count
+            job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=row_count;item.profile=result.profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":PIPELINE_VERSION,"materialization_fingerprint":fingerprint,"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":row_count,"features":result.feature_columns,"content_sha256":digest,"resumed_partitions":result.resumed_partitions,"computed_partitions":result.computed_partitions};mark_finished(job);s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(FeatureSnapshot,snap.id)]);raise
 
@@ -219,8 +218,7 @@ def research_factors(job_id:str):
     with SyncSessionFactory() as s:
         job=s.get(Job,jid);run=s.get(FactorResearchRun,UUID(job.payload["factor_research_id"]))
         snapshot=s.get(FeatureSnapshot,run.snapshot_id);version=s.get(DataVersion,snapshot.data_version_id)
-        job.status="running";job.started_at=datetime.now(UTC);job.attempt+=1
-        job.lease_expires_at=datetime.now(UTC)+timedelta(minutes=15);run.status="running";s.commit()
+        mark_running(job);run.status="running";s.commit()
     try:
         feature_frame=pd.read_parquet(io.BytesIO(download_bytes(snapshot.artifact_uri)))
         if "universe_member" in feature_frame.columns:
@@ -353,7 +351,7 @@ def research_factors(job_id:str):
             job.status="succeeded";job.progress=100;job.result_summary={
                 "factor_research_id":str(item.id),"selected":selected,"factor_count":len(feature_slugs)
             }
-            job.completed_at=datetime.now(UTC);job.lease_expires_at=None;s.commit()
+            mark_finished(job);s.commit()
         return job.result_summary
     except Exception as exc:
         _fail(jid,str(exc),[(FactorResearchRun,run.id)]);raise

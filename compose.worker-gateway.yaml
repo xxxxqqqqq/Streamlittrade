@@ -1,0 +1,14 @@
+# Production-only overlay. The service ports remain loopback-only and are
+# reachable by a compute node solely through its authenticated SSH tunnel.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${CLOUD_POSTGRES_TUNNEL_PORT:-15432}:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:${CLOUD_REDIS_TUNNEL_PORT:-16379}:6379"
+
+  minio:
+    ports:
+      - "127.0.0.1:${CLOUD_MINIO_TUNNEL_PORT:-19000}:9000"
