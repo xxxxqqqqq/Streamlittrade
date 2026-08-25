@@ -16,4 +16,15 @@ describe('CandlestickTradeChart',()=>{
     await wrapper.find('.event-marker').trigger('click')
     expect(wrapper.emitted('select')?.[0]?.[0]).toMatchObject({action:'BUY',signal_date:'2024-01-02'})
   })
+
+  it('zooms around the cursor and exposes the current navigation window',async()=>{
+    const bars=Array.from({length:80},(_,index)=>({date:`2024-02-${String(index+1).padStart(2,'0')}`,open:10,high:11,low:9,close:10+(index%5),volume:1000}))
+    const wrapper=mount(CandlestickTradeChart,{props:{bars,signals:[],events:[]}})
+    const chart=wrapper.find('svg')
+    Object.defineProperty(chart.element(),'getBoundingClientRect',{value:()=>({left:0,width:1000})})
+    expect(chart.attributes('data-window-size')).toBe('80')
+    await chart.trigger('wheel',{deltaY:-1,clientX:500})
+    expect(Number(chart.attributes('data-window-size'))).toBeLessThan(80)
+    expect(Number(chart.attributes('data-window-start'))).toBeGreaterThanOrEqual(0)
+  })
 })
