@@ -76,10 +76,10 @@ async def workbench_context(
         }
     metadata = chain.dataset.metadata_snapshot or {}
     source = metadata.get("source") if isinstance(metadata, dict) else {}
-    definitions = (chain.snapshot.lineage or {}).get("definitions", [])
-    features = [item.get("slug") for item in definitions if item.get("slug")]
+    features = list(metadata.get("features") or [])
     if not features:
-        features = list(metadata.get("features") or [])
+        definitions = (chain.snapshot.lineage or {}).get("definitions", [])
+        features = [item.get("slug") for item in definitions if item.get("slug")]
     folds = list((chain.model.metrics or {}).get("folds") or [])
     return {
         "model": {

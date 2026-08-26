@@ -2,6 +2,7 @@
 import {computed,onMounted,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
+import {errorMessage} from '../ui'
 import CandlestickTradeChart from '../components/CandlestickTradeChart.vue'
 import TradeTimeline from '../components/TradeTimeline.vue'
 import {BarChart3,BrainCircuit,CalendarDays,Database,GitBranch,RefreshCw,ShieldCheck} from 'lucide-vue-next'
@@ -25,7 +26,7 @@ async function loadContext(){
       context.value=(await api.get(`/models/${modelId.value}/trade-workbench/context`,{params:{backtest_id:backtestId.value}})).data
       await loadTimeline()
     }
-  }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
+  }catch(exception:any){error.value=errorMessage(exception)}
   finally{loading.value=false}
 }
 async function loadTimeline(){
@@ -35,7 +36,7 @@ async function loadTimeline(){
     timeline.value=(await api.get(`/backtests/${backtestId.value}/symbol-timeline`,{params:{symbol:symbol.value}})).data
     selected.value=timeline.value.events[0]||timeline.value.signals.find((item:any)=>item.selected)||timeline.value.signals.at(-1)||null
     router.replace({query:{...route.query,model_id:modelId.value,backtest_id:backtestId.value,symbol:symbol.value}})
-  }catch(exception:any){error.value=exception.response?.data?.detail||exception.message;timeline.value=null}
+  }catch(exception:any){error.value=errorMessage(exception);timeline.value=null}
   finally{loading.value=false}
 }
 async function changeModel(){await router.replace({path:'/trade-workbench',query:{model_id:modelId.value}});await loadContext()}
@@ -50,7 +51,7 @@ onMounted(async()=>{
     const requested=String(route.params.id||route.query.model_id||'')
     modelId.value=models.value.some(item=>item.id===requested)?requested:(models.value[0]?.id||'')
     if(modelId.value)await loadContext()
-  }catch(exception:any){error.value=exception.response?.data?.detail||exception.message;loading.value=false}
+  }catch(exception:any){error.value=errorMessage(exception);loading.value=false}
 })
 </script>
 

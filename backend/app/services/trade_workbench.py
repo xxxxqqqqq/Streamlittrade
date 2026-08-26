@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-import io
 import json
 from dataclasses import dataclass
-from functools import lru_cache
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import UUID
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as parquet
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.infrastructure.object_storage import download_bytes
+from backend.app.infrastructure.object_storage import download_file
 from backend.app.models.backtest import BacktestRun
 from backend.app.models.data_catalog import DataVersion, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion
@@ -89,22 +90,35 @@ async def get_model_backtest(
     return run
 
 
-@lru_cache(maxsize=32)
-def _cached_parquet(uri: str) -> pd.DataFrame:
-    return pd.read_parquet(io.BytesIO(download_bytes(uri)))
+def read_parquet(
+    uri: str,
+    *,
+    columns: list[str] | None = None,
+    filters: list[tuple[str, str, Any]] | None = None,
+) -> pd.DataFrame:
+    """Stream an artifact to disk and let PyArrow prune columns and row groups.
 
+    Trade-workbench requests run in the 512 MiB API container.  Reading the
+    complete 87-factor snapshot into a BytesIO and then copying the DataFrame
+    can exceed that limit.  A temporary local file keeps object bytes out of
+    Python heap while Parquet projection/filtering bounds the decoded frame.
+    """
 
-@lru_cache(maxsize=64)
-def _cached_json(uri: str) -> dict[str, Any]:
-    return json.loads(download_bytes(uri).decode("utf-8"))
-
-
-def read_parquet(uri: str) -> pd.DataFrame:
-    return _cached_parquet(uri).copy()
+    with TemporaryDirectory(prefix="quantforge-workbench-") as directory:
+        path = download_file(uri, Path(directory) / "artifact.parquet")
+        available = set(parquet.ParquetFile(path).schema_arrow.names)
+        selected = [column for column in columns if column in available] if columns else None
+        applicable_filters = (
+            [item for item in filters if item[0] in available] if filters else None
+        )
+        return pd.read_parquet(path, columns=selected, filters=applicable_filters)
 
 
 def read_artifact(uri: str) -> dict[str, Any]:
-    return json.loads(json.dumps(_cached_json(uri), ensure_ascii=False))
+    with TemporaryDirectory(prefix="quantforge-workbench-") as directory:
+        path = download_file(uri, Path(directory) / "artifact.json")
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
 
 
 def _date_text(value: Any) -> str:
@@ -131,7 +145,10 @@ def _safe(value: Any) -> Any:
 
 
 def prediction_frame(chain: ModelResearchChain) -> pd.DataFrame:
-    frame = read_parquet(chain.model.prediction_artifact_uri)
+    frame = read_parquet(
+        chain.model.prediction_artifact_uri,
+        columns=["date", "symbol", "prediction", "probability"],
+    )
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
     return rank_model_predictions(frame)
 
@@ -203,7 +220,15 @@ def selection_rows(
 
 
 def market_rows(chain: ModelResearchChain, symbol: str, start: str, end: str) -> list[dict[str, Any]]:
-    frame = read_parquet(chain.version.artifact_uri)
+    requested_fields = [
+        "date", "symbol", "open", "high", "low", "close", "volume", "amount",
+        "is_suspended", "is_st", "limit_up", "limit_down",
+    ]
+    frame = read_parquet(
+        chain.version.artifact_uri,
+        columns=requested_fields,
+        filters=[("symbol", "==", str(symbol))],
+    )
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
     frame["symbol"] = frame["symbol"].astype(str)
     frame = frame.loc[
@@ -222,7 +247,13 @@ def market_rows(chain: ModelResearchChain, symbol: str, start: str, end: str) ->
 
 
 def factor_rows(chain: ModelResearchChain, symbol: str, start: str, end: str) -> list[dict[str, Any]]:
-    frame = read_parquet(chain.snapshot.artifact_uri)
+    metadata = chain.dataset.metadata_snapshot or {}
+    feature_columns = list(metadata.get("features") or [])
+    frame = read_parquet(
+        chain.snapshot.artifact_uri,
+        columns=["date", "symbol", *feature_columns] if feature_columns else None,
+        filters=[("symbol", "==", str(symbol))],
+    )
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
     frame["symbol"] = frame["symbol"].astype(str)
     frame = frame.loc[

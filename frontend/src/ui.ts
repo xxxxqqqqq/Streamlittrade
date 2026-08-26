@@ -17,5 +17,6 @@ export function dismissToast(id:number){
 export function errorMessage(error:any){
   const detail=error?.response?.data?.detail
   if(Array.isArray(detail))return detail.map(item=>item.msg).join('；')
+  if(!detail&&error?.response?.status===502)return '服务暂时无法装配工作台数据，请稍后重试。'
   return detail||error?.message||'操作失败，请稍后重试'
 }
