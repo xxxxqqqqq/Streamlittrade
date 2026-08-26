@@ -27,6 +27,34 @@ from backend.app.services.research_gates import calibration_evidence_complete, v
 
 router=APIRouter(tags=["research"], dependencies=[Depends(get_current_user)])
 
+_MODEL_LIST_METRICS = {
+    "roc_auc", "balanced_accuracy", "rank_ic", "cost_adjusted_return",
+    "excess_return", "annualized_sharpe", "turnover", "evaluation_scope",
+}
+
+
+def _metric_summary(metrics: dict | None, *, include_features: bool = False) -> dict | None:
+    """Keep list responses small while preserving the metrics rendered by list pages."""
+    if metrics is None:
+        return None
+    summary = {key: metrics[key] for key in _MODEL_LIST_METRICS if key in metrics}
+    folds = metrics.get("folds")
+    if isinstance(folds, list):
+        summary["fold_count"] = len(folds)
+    if include_features and isinstance(metrics.get("feature_importance"), list):
+        summary["feature_importance"] = metrics["feature_importance"][:3]
+    return summary
+
+
+def _reproducibility_summary(value: dict | None) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    dataset = value.get("dataset")
+    if not isinstance(dataset, dict):
+        return {}
+    content_sha256 = dataset.get("content_sha256")
+    return {"dataset": {"content_sha256": content_sha256}} if content_sha256 else {}
+
 @router.post("/strategies",response_model=StrategyRead,status_code=201)
 async def create_strategy(body:StrategyCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
     # slug 在项目内代表一条策略演进链，每次提交自动产生下一版本。
@@ -83,7 +111,18 @@ async def create_dataset(body:DatasetCreate,session:AsyncSession=Depends(get_db_
 
 @router.get("/datasets",response_model=list[DatasetRead])
 async def list_datasets(session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
-    return list((await session.scalars(select(Dataset).where(Dataset.project_id==context.project.id).order_by(Dataset.created_at.desc()))).all())
+    items=list((await session.scalars(select(Dataset).where(Dataset.project_id==context.project.id).order_by(Dataset.created_at.desc()))).all())
+    return [
+        {
+            "id": item.id, "name": item.name, "status": item.status, "created_at": item.created_at,
+            "job_id": item.job_id, "feature_snapshot_id": item.feature_snapshot_id,
+            "factor_research_id": item.factor_research_id, "specification": item.specification,
+            "row_count": item.row_count, "feature_count": item.feature_count,
+            "artifact_uri": item.artifact_uri, "metadata_snapshot": None,
+            "error_message": item.error_message,
+        }
+        for item in items
+    ]
 
 @router.get("/datasets/{dataset_id}/artifact")
 async def download_dataset_parquet(dataset_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
@@ -107,11 +146,42 @@ async def create_experiment(body:ExperimentCreate,session:AsyncSession=Depends(g
 
 @router.get("/experiments",response_model=list[ExperimentRead])
 async def list_experiments(session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
-    return list((await session.scalars(select(Experiment).where(Experiment.project_id==context.project.id).order_by(Experiment.created_at.desc()))).all())
+    items=list((await session.scalars(select(Experiment).where(Experiment.project_id==context.project.id).order_by(Experiment.created_at.desc()))).all())
+    return [
+        {
+            "id": item.id, "name": item.name, "status": item.status, "created_at": item.created_at,
+            "job_id": item.job_id, "dataset_id": item.dataset_id, "algorithm": item.algorithm,
+            "parameters": item.parameters, "metrics": _metric_summary(item.metrics),
+            "reproducibility": None, "error_message": item.error_message,
+        }
+        for item in items
+    ]
 
 @router.get("/models",response_model=list[ModelRead])
 async def list_models(session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
-    return list((await session.scalars(select(ModelVersion).join(Experiment,Experiment.id==ModelVersion.experiment_id).where(Experiment.project_id==context.project.id).order_by(ModelVersion.created_at.desc()))).all())
+    items=list((await session.scalars(select(ModelVersion).join(Experiment,Experiment.id==ModelVersion.experiment_id).where(Experiment.project_id==context.project.id).order_by(ModelVersion.created_at.desc()))).all())
+    return [
+        {
+            "id": item.id, "experiment_id": item.experiment_id, "name": item.name,
+            "version": item.version, "algorithm": item.algorithm, "artifact_uri": item.artifact_uri,
+            "prediction_artifact_uri": item.prediction_artifact_uri,
+            "metrics": _metric_summary(item.metrics, include_features=True) or {},
+            "reproducibility": _reproducibility_summary(item.reproducibility),
+            "stage": item.stage, "created_at": item.created_at,
+        }
+        for item in items
+    ]
+
+
+@router.get("/models/{model_id}/detail",response_model=ModelRead)
+async def read_model_detail(model_id:UUID,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    item=await session.scalar(
+        select(ModelVersion)
+        .join(Experiment,Experiment.id==ModelVersion.experiment_id)
+        .where(ModelVersion.id==model_id,Experiment.project_id==context.project.id)
+    )
+    if item is None:raise HTTPException(404,"Model not found")
+    return item
 
 
 @router.get("/models/{model_id}/sealed-evaluation", response_model=SealedEvaluationRead | None)

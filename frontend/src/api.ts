@@ -5,8 +5,8 @@ import {errorMessage,pushToast} from './ui'
 // 浏览器始终访问同源 API；开发服务器和生产 Nginx 分别把 /api 转发给 FastAPI。
 // 这样不会把 localhost 烘焙进静态产物，也能在 Docker、域名和 E2E 环境中复用同一构建。
 const baseURL=import.meta.env.VITE_API_BASE_URL||'/api/v1'
-export const api=axios.create({baseURL,timeout:10000})
-export const rootApi=axios.create({baseURL:baseURL.replace('/api/v1',''),timeout:10000})
+export const api=axios.create({baseURL,timeout:30000})
+export const rootApi=axios.create({baseURL:baseURL.replace('/api/v1',''),timeout:30000})
 api.interceptors.request.use(config=>{if(token.value)config.headers.Authorization=`Bearer ${token.value}`;if(selectedProjectId.value)config.headers['X-Project-ID']=selectedProjectId.value;return config})
 let refreshing:Promise<string>|null=null
 

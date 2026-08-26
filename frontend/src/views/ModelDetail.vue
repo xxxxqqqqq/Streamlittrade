@@ -11,8 +11,7 @@ const reason=ref('已检查样本外指标、时间隔离和经济指标'),chang
 const sealedProtocol=ref({top_n:5,minimum_probability:0.55,rebalance_frequency:5,initial_cash:1000000,max_volume_participation:0.05,lot_size:100,commission:0.0003,minimum_commission:5,stamp_duty:0.0005,slippage:0.001})
 onMounted(async()=>{
   try{
-    const models=(await api.get('/models')).data
-    model.value=models.find((item:any)=>item.id===route.params.id)
+    model.value=(await api.get(`/models/${route.params.id}/detail`)).data
     if(model.value)sealed.value=(await api.get(`/models/${model.value.id}/sealed-evaluation`)).data
     if(!model.value)error.value='没有找到该模型版本'
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
@@ -47,7 +46,7 @@ async function openSealed(){
     const job=await pollJobUntilTerminal(async()=>(await api.get(`/jobs/${response.data.job_id}`)).data)
     if(job.status!=='succeeded')throw new Error(job.error_message||'最终封存区评估未完成')
     sealed.value=(await api.get(`/models/${model.value.id}/sealed-evaluation`)).data
-    model.value=(await api.get('/models')).data.find((item:any)=>item.id===route.params.id)
+    model.value=(await api.get(`/models/${route.params.id}/detail`)).data
   }catch(exception:any){error.value=exception.response?.data?.detail||exception.message}
   finally{changing.value=false}
 }

@@ -14,4 +14,9 @@ describe('unified error formatting',()=>{
     expect(errorMessage({response:{status:502,data:'Bad Gateway'},message:'Request failed with status code 502'}))
       .toBe('服务暂时无法装配工作台数据，请稍后重试。')
   })
+
+  it('explains a client timeout without exposing the raw Axios message',()=>{
+    expect(errorMessage({code:'ECONNABORTED',message:'timeout of 30000ms exceeded'}))
+      .toBe('服务响应时间较长，请稍后重试；后台任务不会因此中断。')
+  })
 })

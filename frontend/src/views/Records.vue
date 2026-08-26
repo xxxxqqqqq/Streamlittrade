@@ -143,7 +143,7 @@ function modelDatasetHash(row:any){return row.reproducibility?.dataset?.content_
             <span :class="{positive:(modelMetric(row,'cost_adjusted_return')||0)>0,negative:(modelMetric(row,'cost_adjusted_return')||0)<0}"><small>成本后收益</small><b>{{modelPercent(modelMetric(row,'cost_adjusted_return'))}}</b></span>
             <span><small>年化夏普</small><b>{{modelNumber(modelMetric(row,'annualized_sharpe'),2)}}</b></span>
           </div>
-          <div class="model-lineage"><small>训练数据 SHA</small><b>{{modelDatasetHash(row)}}</b><span>{{row.metrics?.folds?.length||0}} 折时间序列验证</span></div>
+          <div class="model-lineage"><small>训练数据 SHA</small><b>{{modelDatasetHash(row)}}</b><span>{{row.metrics?.fold_count??row.metrics?.folds?.length??0}} 折时间序列验证</span></div>
           <div class="model-actions"><button class="text-button" @click="router.push('/models/'+row.id)"><Eye :size="14"/>查看模型</button><button class="secondary compact" :disabled="!row.prediction_artifact_uri" @click="router.push('/predictions')"><Sparkles :size="13"/>预测</button></div>
         </article>
         <div v-if="!matching.length&&!loading" class="empty">暂无模型版本，请先完成训练实验。</div>
