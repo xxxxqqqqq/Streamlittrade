@@ -2,14 +2,15 @@
 
 from urllib.parse import quote
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import StreamingResponse
 
 from backend.app.db.session import get_db_session
 from backend.app.infrastructure.outbox import add_outbox
-from backend.app.infrastructure.object_storage import download_bytes
+from backend.app.infrastructure.object_storage import stream_bytes
 from backend.app.models.job import Job
 from backend.app.models.data_catalog import FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation, Strategy
@@ -129,11 +130,13 @@ async def download_dataset_parquet(dataset_id:UUID,session:AsyncSession=Depends(
     item=await session.scalar(select(Dataset).where(Dataset.id==dataset_id,Dataset.project_id==context.project.id))
     if item is None:raise HTTPException(404,"Dataset not found")
     if item.status!="ready" or not item.artifact_uri:raise HTTPException(409,"ready dataset with an artifact is required")
-    try:payload=await run_in_threadpool(download_bytes,item.artifact_uri)
+    try:stream,content_length=await run_in_threadpool(stream_bytes,item.artifact_uri)
     except Exception as exc:raise HTTPException(502,"Unable to download dataset artifact") from exc
     filename=f"{item.name}-{str(item.id)[:8]}.parquet"
     disposition=f"attachment; filename=research-dataset-{str(item.id)[:8]}.parquet; filename*=UTF-8''{quote(filename)}"
-    return Response(payload,media_type="application/vnd.apache.parquet",headers={"Content-Disposition":disposition})
+    headers={"Content-Disposition":disposition,"X-Accel-Buffering":"no"}
+    if content_length:headers["Content-Length"]=content_length
+    return StreamingResponse(stream,media_type="application/vnd.apache.parquet",headers=headers)
 
 @router.post("/experiments",response_model=TaskSubmission,status_code=202)
 async def create_experiment(body:ExperimentCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):

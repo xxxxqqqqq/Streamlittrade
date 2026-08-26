@@ -103,6 +103,32 @@ def download_bytes(uri: str) -> bytes:
     return _retry(operation)
 
 
+def stream_bytes(uri: str, chunk_size: int = 1024 * 1024):
+    """Stream a platform artifact without buffering it in the API process.
+
+    Dataset downloads can be hundreds of megabytes.  Returning ``bytes`` is
+    still useful to worker code that needs an in-memory artifact, but HTTP
+    endpoints should use this iterator so the browser receives data as soon
+    as MinIO starts responding.
+    """
+    bucket, object_name = _bucket_and_name(uri)
+
+    def operation():
+        return object_storage.get_object(bucket, object_name)
+
+    response = _retry(operation)
+    content_length = response.headers.get("Content-Length")
+
+    def chunks():
+        try:
+            yield from response.stream(chunk_size)
+        finally:
+            response.close()
+            response.release_conn()
+
+    return chunks(), content_length
+
+
 def download_file(uri: str, destination: str | Path) -> Path:
     """Download atomically to local SSD so interrupted transfers are harmless."""
 

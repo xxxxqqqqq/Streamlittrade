@@ -1,5 +1,10 @@
 import {api} from './api'
 
+// Parquet research datasets can exceed 100 MB.  This remains finite so a
+// disconnected request does not wait forever, while avoiding an arbitrary
+// one-minute cutoff for an otherwise healthy transfer.
+export const DOWNLOAD_TIMEOUT_MS=10*60*1000
+
 function filenameFromDisposition(value:unknown,fallback:string){
   const header=String(value||'')
   const encoded=header.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
@@ -11,7 +16,7 @@ function filenameFromDisposition(value:unknown,fallback:string){
 
 export async function downloadApiFile(endpoint:string,fallbackName:string){
   try{
-    const response=await api.get(endpoint,{responseType:'blob',timeout:60000})
+    const response=await api.get(endpoint,{responseType:'blob',timeout:DOWNLOAD_TIMEOUT_MS})
     const contentType=String(response.headers['content-type']||'application/octet-stream')
     const file=response.data instanceof Blob?response.data:new Blob([response.data],{type:contentType})
     if(!file.size)throw new Error('下载文件为空，请刷新页面后重试')
@@ -29,6 +34,7 @@ export async function downloadApiFile(endpoint:string,fallbackName:string){
     if(payload instanceof Blob){
       try{detail=JSON.parse(await payload.text()).detail||''}catch{/* non-JSON response */}
     }
-    throw new Error(detail||payload?.detail||exception.message||'下载失败，请稍后重试')
+    const timedOut=exception?.code==='ECONNABORTED'||String(exception?.message||'').toLowerCase().includes('timeout')
+    throw new Error(detail||payload?.detail||(timedOut?'下载时间较长，请检查网络后重试；大文件下载最长等待 10 分钟。':exception.message)||'下载失败，请稍后重试')
   }
 }
