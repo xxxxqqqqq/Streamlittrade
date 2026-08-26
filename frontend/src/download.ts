@@ -1,9 +1,9 @@
 import {api} from './api'
 
-// Parquet research datasets can exceed 100 MB.  This remains finite so a
-// disconnected request does not wait forever, while avoiding an arbitrary
-// one-minute cutoff for an otherwise healthy transfer.
-export const DOWNLOAD_TIMEOUT_MS=10*60*1000
+// Parquet research datasets can exceed 100 MB and may take several minutes
+// on an ordinary connection. Axios treats zero as no client-side deadline;
+// the streaming API and browser connection lifecycle remain the safeguards.
+export const DOWNLOAD_TIMEOUT_MS=0
 
 function filenameFromDisposition(value:unknown,fallback:string){
   const header=String(value||'')
@@ -35,6 +35,6 @@ export async function downloadApiFile(endpoint:string,fallbackName:string){
       try{detail=JSON.parse(await payload.text()).detail||''}catch{/* non-JSON response */}
     }
     const timedOut=exception?.code==='ECONNABORTED'||String(exception?.message||'').toLowerCase().includes('timeout')
-    throw new Error(detail||payload?.detail||(timedOut?'下载时间较长，请检查网络后重试；大文件下载最长等待 10 分钟。':exception.message)||'下载失败，请稍后重试')
+    throw new Error(detail||payload?.detail||(timedOut?'下载连接已中断，请检查网络后重试。':exception.message)||'下载失败，请稍后重试')
   }
 }
