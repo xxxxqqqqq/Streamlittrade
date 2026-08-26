@@ -5,6 +5,7 @@ import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
+import DataJobProgress from '../components/DataJobProgress.vue'
 import {Check,CheckCircle2,ChevronDown,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
 
 const router=useRouter()
@@ -17,6 +18,9 @@ const factorLibrary=ref<any[]>([])
 const error=ref('')
 const notice=ref('')
 const busy=ref(false)
+type DataJobOperation='sync'|'materialize'
+const activeJob=ref<any|null>(null)
+const activeOperation=ref<DataJobOperation|null>(null)
 const factorSearch=ref('')
 const librarySearch=ref('')
 const selectedLibraryFamily=ref('all')
@@ -216,15 +220,71 @@ async function load(){
   }
 }
 
-onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.detail||exception.message))
+const pendingJobKey=()=>`quant_data_center_job:${selectedProjectId.value||'default'}`
 
-async function wait(jobId:string){
+function rememberJob(jobId:string,operation:DataJobOperation,resourceId:string){
+  sessionStorage.setItem(pendingJobKey(),JSON.stringify({jobId,operation,resourceId}))
+}
+
+function forgetJob(){
+  sessionStorage.removeItem(pendingJobKey())
+}
+
+async function wait(jobId:string,operation:DataJobOperation,resourceId:string){
+  activeOperation.value=operation
+  activeJob.value={id:jobId,status:'queued',progress:0}
+  rememberJob(jobId,operation,resourceId)
   const job=await pollJobUntilTerminal(
     async()=>(await api.get(`/jobs/${jobId}`)).data,
-    {onLongRunning:()=>notice.value='任务仍在后台计算，离开本页不会取消任务，可在任务中心查看进度。'},
+    {
+      onUpdate:current=>activeJob.value=current,
+      onLongRunning:()=>notice.value='任务仍在后台计算，离开本页不会取消任务，可在任务中心查看进度。',
+    },
   )
+  forgetJob()
   if(job.status!=='succeeded')throw new Error(job.error_message||'任务未完成')
+  return job
 }
+
+async function finishDataJob(operation:DataJobOperation,resourceId:string){
+  await load()
+  if(operation==='materialize'){
+    await router.push({path:'/factor-research',query:{snapshot:resourceId}})
+    return
+  }
+  materialForm.value.data_version_id=resourceId
+  materialForm.value.name=`${syncForm.value.name} · 因子快照`
+  notice.value='数据同步与质量检查完成，新的 Standardized 版本已自动带入因子快照。'
+}
+
+async function resumePendingJob(){
+  const saved=sessionStorage.getItem(pendingJobKey())
+  if(!saved)return
+  busy.value=true
+  try{
+    const {jobId,operation,resourceId}=JSON.parse(saved)
+    if(!jobId||!['sync','materialize'].includes(operation)||!resourceId){
+      forgetJob()
+      return
+    }
+    await wait(jobId,operation,resourceId)
+    await finishDataJob(operation,resourceId)
+  }catch(exception:any){
+    forgetJob()
+    error.value=exception.response?.data?.detail||exception.message
+  }finally{
+    busy.value=false
+  }
+}
+
+onMounted(async()=>{
+  try{
+    await load()
+    await resumePendingJob()
+  }catch(exception:any){
+    error.value=exception.response?.data?.detail||exception.message
+  }
+})
 
 async function createSource(){
   busy.value=true
@@ -254,11 +314,8 @@ async function sync(){
       ...syncForm.value,
       symbols:syncForm.value.symbols.split(',').map(symbol=>symbol.trim()).filter(Boolean),
     })
-    await wait(response.data.job_id)
-    await load()
-    materialForm.value.data_version_id=response.data.resource_id
-    materialForm.value.name=`${syncForm.value.name} · 因子快照`
-    notice.value='数据同步与质量检查完成，新的 Standardized 版本已自动带入因子快照。'
+    await wait(response.data.job_id,'sync',response.data.resource_id)
+    await finishDataJob('sync',response.data.resource_id)
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
   }finally{
@@ -305,9 +362,8 @@ async function materialize(){
   notice.value=''
   try{
     const response=await api.post('/data-center/materializations',materialForm.value)
-    await wait(response.data.job_id)
-    await load()
-    await router.push({path:'/factor-research',query:{snapshot:response.data.resource_id}})
+    await wait(response.data.job_id,'materialize',response.data.resource_id)
+    await finishDataJob('materialize',response.data.resource_id)
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
   }finally{
@@ -479,6 +535,13 @@ function clearSelectedFactors(){
               <Download :size="15"/>同步并通过质量门禁
             </button>
           </div>
+          <DataJobProgress
+            v-if="activeOperation==='sync'&&activeJob"
+            operation="sync"
+            :status="activeJob.status"
+            :progress="activeJob.progress"
+            :worker-name="activeJob.worker_name"
+          />
           <div v-if="selectedVersion" class="step-output">
             <CheckCircle2 :size="16"/>
             <div><b>{{dataVersionName(selectedVersion)}}</b><span>{{versionMeta(selectedVersion)}}</span></div>
@@ -691,6 +754,13 @@ function clearSelectedFactors(){
             <div><small>数据行数</small><b>{{selectedVersion.row_count||0}}</b></div>
             <div><small>选中因子</small><b>{{materialForm.feature_definition_ids.length}} 个</b></div>
           </div>
+          <DataJobProgress
+            v-if="activeOperation==='materialize'&&activeJob"
+            operation="materialize"
+            :status="activeJob.status"
+            :progress="activeJob.progress"
+            :worker-name="activeJob.worker_name"
+          />
           <div class="snapshot-actions">
             <RouterLink class="secondary link-button" to="/factor-research">
               <Sparkles :size="15"/>查看因子研究
