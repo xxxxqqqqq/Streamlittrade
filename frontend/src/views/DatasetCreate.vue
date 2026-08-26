@@ -27,6 +27,17 @@ const job=ref<any>(null)
 const datasetId=ref('')
 const longRunning=ref(false)
 const progress=computed(()=>job.value?.progress??0)
+const progressStage=computed(()=>{
+  if(job.value?.status==='queued')return '等待本地计算节点接单'
+  if(progress.value<14)return '正在校验快照、因子门禁与数据血缘'
+  if(progress.value<34)return '正在读取本地缓存中的快照与标准行情'
+  if(progress.value<48)return '正在裁剪训练所需因子与可交易股票池'
+  if(progress.value<62)return '正在生成未来收益标签并合并特征'
+  if(progress.value<80)return '正在清理样本并划分训练、调参与封存区'
+  if(progress.value<94)return '正在序列化不可变研究数据集'
+  if(progress.value<100)return '正在上传并登记研究数据集'
+  return '研究数据集构建完成'
+})
 const formalMode=computed(()=>form.value.data_source==='feature_snapshot')
 const eligibleFactorRuns=computed(()=>factorRuns.value.filter(
   (run:any)=>run.status==='succeeded'
@@ -165,7 +176,7 @@ async function submit(){
           </template>
         </div>
         <div v-if="job" class="job-progress">
-          <div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待 Worker':'正在合并特征与标签'}}</span><b>{{progress}}%</b></div>
+          <div><LoaderCircle :size="17" class="spin"/><span>{{progressStage}}</span><b>{{Math.round(progress)}}%</b></div>
           <div class="progress-track"><i :style="{width:progress+'%'}"></i></div>
         </div>
         <div v-if="longRunning" class="background-task-note">

@@ -16,6 +16,7 @@ from backend.app.workers.feature_materialization import (
     materialize_partitioned_snapshot,
 )
 from backend.app.workers.local_artifacts import promote_cached_artifact
+from backend.app.workers.research import _merge_snapshot_features_and_labels
 
 
 class HybridQueueRoutingTests(unittest.TestCase):
@@ -162,6 +163,47 @@ class PartitionedMaterializationTests(unittest.TestCase):
                 cached = promote_cached_artifact(source, digest)
                 self.assertEqual(cached, root / "cache" / f"{digest}.parquet")
                 self.assertEqual(cached.read_bytes(), source.read_bytes())
+
+    def test_dataset_merge_projects_approved_features_and_reports_milestones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature_path, market_path = root / "features.parquet", root / "market.parquet"
+            dates = pd.date_range("2025-01-01", periods=4)
+            pd.DataFrame({
+                "date": dates,
+                "symbol": ["000001"] * 4,
+                "factor_a": [1.0, 2.0, 3.0, 4.0],
+                "unused_factor": [9.0] * 4,
+                "universe_member": [True] * 4,
+            }).to_parquet(feature_path, index=False)
+            pd.DataFrame({
+                "date": dates,
+                "symbol": ["000001"] * 4,
+                "close": [10.0, 11.0, 12.0, 13.0],
+                "volume": [1000] * 4,
+            }).to_parquet(market_path, index=False)
+            progress = []
+            read_parquet = pd.read_parquet
+
+            with patch(
+                "backend.app.workers.research.pd.read_parquet",
+                side_effect=read_parquet,
+            ) as reader:
+                result, universe_applied = _merge_snapshot_features_and_labels(
+                    feature_path, market_path, ["factor_a"], 1, progress.append
+                )
+
+            self.assertTrue(universe_applied)
+            self.assertEqual(len(result), 3)
+            self.assertNotIn("unused_factor", result.columns)
+            self.assertNotIn("volume", result.columns)
+            self.assertEqual(reader.call_args_list[0].kwargs["columns"], [
+                "date", "symbol", "factor_a", "universe_member",
+            ])
+            self.assertEqual(
+                reader.call_args_list[1].kwargs["columns"], ["date", "symbol", "close"]
+            )
+            self.assertEqual(progress, [34, 42, 48, 55, 62, 68])
 
 
 if __name__ == "__main__":

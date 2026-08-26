@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import joblib
 import pandas as pd
+import pyarrow.parquet as parquet
 import sklearn
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
@@ -26,6 +27,7 @@ from quant_core.ml import FEATURES, build_training_frame, cross_sectional_rank_f
 from quant_core.validation import fit_time_ordered_sigmoid, probability_diagnostics
 from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
 from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
+from backend.app.workers.local_artifacts import cached_artifact
 
 
 def _build_estimator(algorithm: str, parameters: dict):
@@ -56,12 +58,12 @@ def _prepare_model_features(
     return frame[feature_columns]
 
 
-def _check_cancel(job_id: UUID) -> None:
+def _check_cancel(job_id: UUID, progress: float | None = None) -> None:
     with SyncSessionFactory() as session:
         job = session.get(Job, job_id)
         if job:
             try:
-                heartbeat(job)
+                heartbeat(job, progress)
             except TaskCanceled:
                 session.commit()
                 raise
@@ -96,12 +98,15 @@ def build_dataset(job_id: str) -> dict:
     try:
         if spec["data_source"] == "feature_snapshot":
             result, feature_columns, source_metadata = _dataset_from_feature_snapshot(
-                dataset.id, dataset.project_id, spec
+                dataset.id,
+                dataset.project_id,
+                spec,
+                progress=lambda value: _check_cancel(jid, value),
             )
         else:
             frames = []
             for index, symbol in enumerate(spec["symbols"]):
-                _check_cancel(jid)
+                _check_cancel(jid, 10 + 55 * index / max(1, len(spec["symbols"])))
                 if spec["data_source"] == "demo":
                     data = generate_demo_stock_data(
                         pd.Timestamp(spec["start_date"]).date(), pd.Timestamp(spec["end_date"]).date(), seed=42 + index
@@ -112,7 +117,7 @@ def build_dataset(job_id: str) -> dict:
             result = pd.concat(frames, ignore_index=True).sort_values(["date", "symbol"])
             feature_columns = FEATURES
             source_metadata = {"mode": "legacy_fetch", "data_source": spec["data_source"]}
-        _check_cancel(jid)
+        _check_cancel(jid, 70)
         research_split = three_way_research_split(
             result["date"],
             training_fraction=float(spec.get("training_fraction", 0.55)),
@@ -121,11 +126,15 @@ def build_dataset(job_id: str) -> dict:
             purge_days=int(spec["horizon"]),
             embargo_days=int(spec["horizon"]),
         )
+        _check_cancel(jid, 80)
         buffer = io.BytesIO()
         result.to_parquet(buffer, index=False)
+        _check_cancel(jid, 90)
         payload = buffer.getvalue()
         content_hash = hashlib.sha256(payload).hexdigest()
+        _check_cancel(jid, 94)
         uri = upload_bytes(f"datasets/{dataset.id}/{content_hash[:12]}/features.parquet", payload, "application/vnd.apache.parquet")
+        _check_cancel(jid, 98)
         metadata = {
             "schema_version": 2,
             "content_sha256": content_hash,
@@ -164,7 +173,12 @@ def build_dataset(job_id: str) -> dict:
         raise
 
 
-def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dict) -> tuple[pd.DataFrame, list[str], dict]:
+def _dataset_from_feature_snapshot(
+    dataset_id: UUID,
+    project_id: UUID,
+    spec: dict,
+    progress=None,
+) -> tuple[pd.DataFrame, list[str], dict]:
     """Merge a versioned feature snapshot with labels derived from its exact market-data parent."""
     snapshot_id = UUID(str(spec["feature_snapshot_id"]))
     with SyncSessionFactory() as session:
@@ -197,30 +211,21 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
         snapshot_uri, version_uri = snapshot.artifact_uri, version.artifact_uri
         snapshot_hash, version_hash = snapshot.content_sha256, version.content_sha256
         lineage = dict(snapshot.lineage or {})
-    features = pd.read_parquet(io.BytesIO(download_bytes(snapshot_uri)))
-    market = pd.read_parquet(io.BytesIO(download_bytes(version_uri)))
-    for frame in (features, market):
-        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
-        frame["symbol"] = frame["symbol"].astype(str)
-    missing_features = [column for column in feature_columns if column not in features.columns]
-    if missing_features:
-        raise ValueError(f"Approved factors are missing from snapshot: {', '.join(missing_features)}")
-    universe_applied = "universe_member" in features.columns
-    if universe_applied:
-        features = features[features["universe_member"].fillna(False)].copy()
-    features = features[["date", "symbol", *feature_columns]].copy()
-    horizon = int(spec["horizon"])
-    market = market.sort_values(["symbol", "date"])
-    market["future_return"] = market.groupby("symbol")["close"].shift(-horizon) / market["close"] - 1
-    market["label"] = (market["future_return"] > 0).where(market["future_return"].notna())
-    labels = market[["date", "symbol", "future_return", "label"]]
-    result = features.merge(labels, on=["date", "symbol"], how="inner")
-    result = result.replace([float("inf"), float("-inf")], pd.NA)
-    result = result.dropna(subset=[*feature_columns, "future_return", "label"])
-    if result.empty:
-        raise ValueError("No trainable rows remain after feature warm-up and label horizon")
-    result["label"] = result["label"].astype(int)
-    result = result.sort_values(["date", "symbol"]).reset_index(drop=True)
+    if progress:
+        progress(14)
+    feature_path = cached_artifact(snapshot_uri, snapshot_hash)
+    if progress:
+        progress(20)
+    market_path = cached_artifact(version_uri, version_hash)
+    if progress:
+        progress(26)
+    result, universe_applied = _merge_snapshot_features_and_labels(
+        feature_path,
+        market_path,
+        feature_columns,
+        int(spec["horizon"]),
+        progress,
+    )
     return result, feature_columns, {
         "mode": "feature_snapshot",
         "feature_snapshot_id": str(snapshot_id),
@@ -232,6 +237,57 @@ def _dataset_from_feature_snapshot(dataset_id: UUID, project_id: UUID, spec: dic
         "factor_gate": gate,
         "dataset_id": str(dataset_id),
     }
+
+
+def _merge_snapshot_features_and_labels(
+    feature_path,
+    market_path,
+    feature_columns: list[str],
+    horizon: int,
+    progress=None,
+) -> tuple[pd.DataFrame, bool]:
+    """Read only approved inputs and expose honest dataset-build milestones."""
+
+    available = set(parquet.ParquetFile(feature_path).schema_arrow.names)
+    missing_features = [column for column in feature_columns if column not in available]
+    if missing_features:
+        raise ValueError(f"Approved factors are missing from snapshot: {', '.join(missing_features)}")
+    universe_applied = "universe_member" in available
+    feature_fields = ["date", "symbol", *feature_columns]
+    if universe_applied:
+        feature_fields.append("universe_member")
+    features = pd.read_parquet(feature_path, columns=feature_fields)
+    if progress:
+        progress(34)
+    market = pd.read_parquet(market_path, columns=["date", "symbol", "close"])
+    if progress:
+        progress(42)
+    for frame in (features, market):
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        frame["symbol"] = frame["symbol"].astype(str)
+    if universe_applied:
+        features = features[features["universe_member"].fillna(False)].copy()
+    features = features[["date", "symbol", *feature_columns]].copy()
+    if progress:
+        progress(48)
+    market = market.sort_values(["symbol", "date"])
+    market["future_return"] = market.groupby("symbol")["close"].shift(-horizon) / market["close"] - 1
+    market["label"] = (market["future_return"] > 0).where(market["future_return"].notna())
+    if progress:
+        progress(55)
+    labels = market[["date", "symbol", "future_return", "label"]]
+    result = features.merge(labels, on=["date", "symbol"], how="inner")
+    if progress:
+        progress(62)
+    result = result.replace([float("inf"), float("-inf")], pd.NA)
+    result = result.dropna(subset=[*feature_columns, "future_return", "label"])
+    if result.empty:
+        raise ValueError("No trainable rows remain after feature warm-up and label horizon")
+    result["label"] = result["label"].astype(int)
+    result = result.sort_values(["date", "symbol"]).reset_index(drop=True)
+    if progress:
+        progress(68)
+    return result, universe_applied
 
 
 def train_experiment(job_id: str) -> dict:
