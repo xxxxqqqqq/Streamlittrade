@@ -75,7 +75,7 @@ def _record_step(pipeline: ResearchPipeline, spec: dict, step: str, job_id: uuid
     pipeline.current_job_id = job_id
 
 
-def _create_factor_research(session, pipeline: ResearchPipeline, spec: dict, snapshot_id: uuid.UUID) -> None:
+def _build_factor_research(pipeline: ResearchPipeline, spec: dict, snapshot_id: uuid.UUID) -> tuple[Job, FactorResearchRun]:
     inputs = spec["inputs"]
     body = FactorResearchCreate(
         name=_step_name(pipeline.name, "因子研究"),
@@ -95,10 +95,16 @@ def _create_factor_research(session, pipeline: ResearchPipeline, spec: dict, sna
         parameters=body.model_dump(exclude={"name", "snapshot_id"}),
         selected_feature_slugs=[],
     )
+    return job, run
+
+
+def _create_factor_research(session, pipeline: ResearchPipeline, spec: dict, snapshot_id: uuid.UUID) -> None:
+    job, run = _build_factor_research(pipeline, spec, snapshot_id)
     session.add(job)
+    session.flush()
     session.add(run)
     add_outbox(session, job, _FACTOR_RESEARCH_FUNC)
-    _record_step(pipeline, spec, "factor_research", job_id, run_id)
+    _record_step(pipeline, spec, "factor_research", job.id, run.id)
 
 
 def _create_dataset(session, pipeline: ResearchPipeline, spec: dict, run_id: uuid.UUID) -> None:
@@ -142,6 +148,7 @@ def _create_dataset(session, pipeline: ResearchPipeline, spec: dict, run_id: uui
         name=body.name, status="queued", specification=body.model_dump(mode="json"),
     )
     session.add(job)
+    session.flush()
     session.add(dataset)
     add_outbox(session, job, _DATASET_FUNC)
     _record_step(pipeline, spec, "dataset", job_id, dataset_id)
@@ -166,6 +173,7 @@ def _create_training(session, pipeline: ResearchPipeline, spec: dict, dataset_id
     )
     experiment = Experiment(id=experiment_id, project_id=pipeline.project_id, job_id=job_id, **body.model_dump())
     session.add(job)
+    session.flush()
     session.add(experiment)
     add_outbox(session, job, _TRAINING_FUNC)
     _record_step(pipeline, spec, "training", job_id, experiment_id)
@@ -232,13 +240,19 @@ def _create_backtest(session, pipeline: ResearchPipeline, spec: dict, experiment
         start_date=request.start_date, end_date=request.end_date, initial_cash=request.initial_cash,
     )
     session.add(job)
+    session.flush()
     session.add(run)
     add_outbox(session, job, _BACKTEST_FUNC)
     _record_step(pipeline, spec, "backtest", job_id, backtest_id)
 
 
-def create_first_step(session, pipeline: ResearchPipeline) -> None:
-    """创建流水线首步任务；供 API 在提交事务前调用（不做 flush/commit）。"""
+def plan_first_step(pipeline: ResearchPipeline) -> tuple[Job, object, str, dict, str]:
+    """构建首步任务与资源对象（不触碰 session）。
+
+    返回 (job, resource, function_path, spec, step)。调用方必须按
+    add(job) → flush → add(resource) 的顺序落库，jobs 与其他表的 FK
+    没有 relationship，依赖显式 flush 保证插入顺序。
+    """
     spec = copy.deepcopy(pipeline.spec or {})
     inputs = spec["inputs"]
     if pipeline.current_step == "materialize":
@@ -255,14 +269,13 @@ def create_first_step(session, pipeline: ResearchPipeline) -> None:
             feature_definition_ids=list(inputs["feature_definition_ids"]),
             lineage={"data_version_id": inputs["data_version_id"]},
         )
-        session.add(job)
-        session.add(snapshot)
-        add_outbox(session, job, _MATERIALIZE_FUNC)
         _record_step(pipeline, spec, "materialize", job_id, snapshot_id)
-    elif pipeline.current_step == "factor_research":
-        _create_factor_research(session, pipeline, spec, uuid.UUID(inputs["feature_snapshot_id"]))
-    else:
-        raise ValueError(f"非法的流水线首步: {pipeline.current_step}")
+        return job, snapshot, _MATERIALIZE_FUNC, spec, "materialize"
+    if pipeline.current_step == "factor_research":
+        job, run = _build_factor_research(pipeline, spec, uuid.UUID(inputs["feature_snapshot_id"]))
+        _record_step(pipeline, spec, "factor_research", job.id, run.id)
+        return job, run, _FACTOR_RESEARCH_FUNC, spec, "factor_research"
+    raise ValueError(f"非法的流水线首步: {pipeline.current_step}")
 
 
 def _fail_pipeline(pipeline: ResearchPipeline, spec: dict, message: str) -> None:

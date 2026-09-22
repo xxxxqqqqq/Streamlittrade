@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.projects import ProjectContext, get_project_context
 from backend.app.core.security import get_current_user
 from backend.app.db.session import get_db_session
+from backend.app.infrastructure.outbox import add_outbox
 from backend.app.models.data_catalog import DataVersion, FeatureDefinition, FeatureSnapshot
 from backend.app.models.research import ResearchPipeline
 from backend.app.schemas.research import PipelineRead, PipelineSubmission, QuickResearchCreate
-from backend.app.services.pipeline import build_pipeline_spec, create_first_step
+from backend.app.services.pipeline import build_pipeline_spec, plan_first_step
 
 router = APIRouter(tags=["research-pipelines"], dependencies=[Depends(get_current_user)])
 
@@ -67,8 +68,12 @@ async def create_quick_research(
         name=body.name, status="running", current_step=first_step,
         spec=build_pipeline_spec(inputs, first_step),
     )
+    job, resource, function_path, _spec, _step = plan_first_step(pipeline)
+    session.add(job)
+    await session.flush()
     session.add(pipeline)
-    create_first_step(session, pipeline)
+    session.add(resource)
+    add_outbox(session, job, function_path)
     await session.commit()
     return PipelineSubmission(pipeline_id=pipeline.id, job_id=pipeline.current_job_id)
 
