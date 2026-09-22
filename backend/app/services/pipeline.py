@@ -51,6 +51,16 @@ _TRAINING_FUNC = "backend.app.workers.research.train_experiment"
 _BACKTEST_FUNC = "backend.app.workers.backtest.execute_backtest"
 
 
+def latest_definitions(definitions):
+    """同一因子 slug 的多个版本只保留最新版本；快照物化要求 slug 唯一。"""
+    latest: dict = {}
+    for item in definitions:
+        current = latest.get(item.slug)
+        if current is None or (item.version, item.created_at) > (current.version, current.created_at):
+            latest[item.slug] = item
+    return [latest[slug] for slug in sorted(latest)]
+
+
 def build_pipeline_spec(inputs: dict[str, Any], first_step: str) -> dict[str, Any]:
     """初始化流水线编排状态；被跳过的步骤显式标记为 skipped。"""
     steps = {

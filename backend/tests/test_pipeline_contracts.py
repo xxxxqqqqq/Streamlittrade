@@ -16,6 +16,7 @@ from backend.app.services.pipeline import (
     PIPELINE_STEPS,
     advance_pipeline_record,
     build_pipeline_spec,
+    latest_definitions,
 )
 
 
@@ -80,6 +81,30 @@ class PipelineSpecTests(unittest.TestCase):
         self.assertEqual(spec["steps"]["materialize"]["status"], "skipped")
         self.assertEqual(spec["steps"]["factor_research"]["status"], "pending")
         self.assertEqual(set(spec["steps"].keys()), set(PIPELINE_STEPS))
+
+
+class LatestDefinitionTests(unittest.TestCase):
+    """一键研究默认纳入全部活跃因子，但同一 slug 只能物化最新版本。"""
+
+    def test_keeps_only_the_latest_version_per_slug(self):
+        from datetime import datetime, UTC
+        base = datetime(2026, 1, 1, tzinfo=UTC)
+        defs = [
+            SimpleNamespace(slug="mom", version=1, created_at=base, id="v1"),
+            SimpleNamespace(slug="mom", version=2, created_at=base, id="v2"),
+            SimpleNamespace(slug="rsi", version=1, created_at=base, id="r1"),
+        ]
+
+        selected = latest_definitions(defs)
+
+        self.assertEqual([item.id for item in selected], ["v2", "r1"])
+
+    def test_same_version_prefers_the_newer_definition(self):
+        from datetime import datetime, UTC
+        older = SimpleNamespace(slug="mom", version=1, created_at=datetime(2026, 1, 1, tzinfo=UTC), id="old")
+        newer = SimpleNamespace(slug="mom", version=1, created_at=datetime(2026, 2, 1, tzinfo=UTC), id="new")
+
+        self.assertEqual([item.id for item in latest_definitions([older, newer])], ["new"])
 
 
 class AdvancePipelineTests(unittest.TestCase):

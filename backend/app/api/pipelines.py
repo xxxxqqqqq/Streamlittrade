@@ -13,7 +13,7 @@ from backend.app.infrastructure.outbox import add_outbox
 from backend.app.models.data_catalog import DataVersion, FeatureDefinition, FeatureSnapshot
 from backend.app.models.research import ResearchPipeline
 from backend.app.schemas.research import PipelineRead, PipelineSubmission, QuickResearchCreate
-from backend.app.services.pipeline import build_pipeline_spec, plan_first_step
+from backend.app.services.pipeline import build_pipeline_spec, latest_definitions, plan_first_step
 
 router = APIRouter(tags=["research-pipelines"], dependencies=[Depends(get_current_user)])
 
@@ -60,9 +60,11 @@ async def create_quick_research(
         )
         if not definitions:
             raise HTTPException(409, "当前没有可用的因子定义")
+        # 快照物化要求每个因子 slug 唯一：同一因子的多个版本只取最新版本。
+        selected = latest_definitions(definitions)
         first_step = "materialize"
         inputs["data_version_id"] = str(version.id)
-        inputs["feature_definition_ids"] = [str(item.id) for item in definitions]
+        inputs["feature_definition_ids"] = [str(item.id) for item in selected]
     pipeline = ResearchPipeline(
         id=uuid4(), project_id=context.project.id, owner_id=context.user.id,
         name=body.name, status="running", current_step=first_step,
