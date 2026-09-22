@@ -19,6 +19,11 @@ OPTIONAL_DEFAULTS = {
     "limit_down": np.nan,
     "cash_dividend": 0.0,
     "split_ratio": 1.0,
+    "pe_ttm": np.nan,
+    "pb_mrq": np.nan,
+    "ps_ttm": np.nan,
+    "pcf_ncf_ttm": np.nan,
+    "turnover": np.nan,
 }
 
 
@@ -54,7 +59,7 @@ def standardize_market_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     for column, default in OPTIONAL_DEFAULTS.items():
         if column not in result:
             result[column] = default
-    numeric = [*REQUIRED_MARKET_COLUMNS, "amount", "adj_factor", "limit_up", "limit_down", "cash_dividend", "split_ratio"]
+    numeric = [*REQUIRED_MARKET_COLUMNS, "amount", "adj_factor", "limit_up", "limit_down", "cash_dividend", "split_ratio", "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover"]
     for column in numeric:
         result[column] = pd.to_numeric(result[column], errors="coerce")
     explicit_suspension = result["is_suspended"].fillna(False).astype(bool)

@@ -16,7 +16,7 @@ np = None
 pd = None
 
 
-MARKET_FIELDS = frozenset({"open", "high", "low", "close", "volume"})
+MARKET_FIELDS = frozenset({"open", "high", "low", "close", "volume", "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover"})
 EXPRESSION_FUNCTIONS = frozenset(
     {
         "abs",
@@ -80,6 +80,11 @@ BASE_FACTOR_TEMPLATES = (
     FactorTemplate("min_daily_return", "最小单日收益", "risk", "窗口内最小单日收益率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
     FactorTemplate("volume_volatility", "成交量波动", "liquidity", "成交量变化率的滚动波动率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
     FactorTemplate("volume_momentum", "成交量动量", "liquidity", "成交量相对窗口前的变化率", 20, "Qlib Alpha158 inspired", "https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py"),
+    FactorTemplate("ep", "盈利收益率", "valuation", "PE(TTM) 的倒数（E/P），日频估值字段直接取自数据源", 1),
+    FactorTemplate("bp", "账面市值比", "valuation", "市净率的倒数（B/P），日频估值字段直接取自数据源", 1),
+    FactorTemplate("sp", "营收市值比", "valuation", "PS(TTM) 的倒数（S/P），日频估值字段直接取自数据源", 1),
+    FactorTemplate("cfp", "现金流市值比", "valuation", "PCF(TTM) 的倒数（CF/P），日频估值字段直接取自数据源", 1),
+    FactorTemplate("turnover_level", "换手率水平", "valuation", "日换手率（%）的 log1p，数据源日频换手率字段", 1),
 )
 
 ROLLING_WINDOWS = (
@@ -88,7 +93,8 @@ ROLLING_WINDOWS = (
     240, 252, 360,
 )
 POINT_IN_TIME_IMPLEMENTATIONS = frozenset(
-    {"amplitude", "overnight_gap", "intraday_return", "close_location", "upper_shadow", "lower_shadow"}
+    {"amplitude", "overnight_gap", "intraday_return", "close_location", "upper_shadow", "lower_shadow",
+     "ep", "bp", "sp", "cfp", "turnover_level"}
 )
 
 
@@ -453,4 +459,14 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
     if implementation == "volume_momentum":
         volume = group["volume"].astype(float)
         return volume / volume.shift(window).replace(0, np.nan) - 1
+    if implementation in ("ep", "bp", "sp", "cfp"):
+        # 估值因子直接使用数据源给定的日频估值字段（含股本口径），
+        # 禁止用复权价自算。分母为 0 或缺失时因子为空，负值保留（亏损企业
+        # 在截面上是有意义的排序信息）。
+        column = {"ep": "pe_ttm", "bp": "pb_mrq", "sp": "ps_ttm", "cfp": "pcf_ncf_ttm"}[implementation]
+        ratio = pd.to_numeric(group.get(column, pd.Series(np.nan, index=group.index)), errors="coerce").astype(float)
+        return (1.0 / ratio.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+    if implementation == "turnover_level":
+        turnover = pd.to_numeric(group.get("turnover", pd.Series(np.nan, index=group.index)), errors="coerce").astype(float)
+        return np.log1p(turnover.where(turnover >= 0))
     raise ValueError(f"Unsupported factor implementation: {implementation}")

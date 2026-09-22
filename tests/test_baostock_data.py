@@ -36,7 +36,7 @@ class _BaoStockClient:
         self.requested_fields = fields
         return _Response(
             fields,
-            [["2024-01-02", "10", "11", "9", "10.5", "100000", "1050000"]],
+            [["2024-01-02", "10", "11", "9", "10.5", "100000", "1050000", "12.5", "1.3", "0.8", "5.2", "2.1"]],
         )
 
     def logout(self):
@@ -51,13 +51,15 @@ class BaoStockAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             client.requested_fields,
-            "date,open,high,low,close,volume,amount",
+            "date,open,high,low,close,volume,amount,peTTM,pbMRQ,psTTM,pcfNcfTTM,turn",
         )
         self.assertEqual(
             list(result.columns),
-            ["open", "high", "low", "close", "volume", "amount"],
+            ["open", "high", "low", "close", "volume", "amount", "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover"],
         )
         self.assertEqual(result.iloc[0]["amount"], 1_050_000)
+        self.assertEqual(result.iloc[0]["pe_ttm"], 12.5)
+        self.assertEqual(result.iloc[0]["turnover"], 2.1)
         self.assertTrue(client.logged_out)
 
 

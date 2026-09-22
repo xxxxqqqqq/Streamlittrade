@@ -41,7 +41,8 @@ class FeatureCreate(BaseModel):
         "liquidity_trend","turnover_stability","volume_price_confirmation",
         "intraday_return","close_location","upper_shadow","lower_shadow","price_efficiency",
         "return_kurtosis","up_day_ratio","max_daily_return","min_daily_return",
-        "volume_volatility","volume_momentum"
+        "volume_volatility","volume_momentum",
+        "ep","bp","sp","cfp","turnover_level"
     ]
     parameters:dict[str,Any]=Field(default_factory=dict);description:str=""
     @model_validator(mode="after")

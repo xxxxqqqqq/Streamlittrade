@@ -71,7 +71,7 @@ def fetch_stock_data(
 
             result = bs.query_history_k_data_plus(
                 code=bs_code,
-                fields="date,open,high,low,close,volume,amount",
+                fields="date,open,high,low,close,volume,amount,peTTM,pbMRQ,psTTM,pcfNcfTTM,turn",
                 start_date=start,
                 end_date=end,
                 frequency="d",
@@ -88,8 +88,20 @@ def fetch_stock_data(
 
             data = pd.DataFrame(rows, columns=result.fields)
             data["date"] = pd.to_datetime(data["date"], errors="raise")
+            data = data.rename(
+                columns={
+                    "peTTM": "pe_ttm",
+                    "pbMRQ": "pb_mrq",
+                    "psTTM": "ps_ttm",
+                    "pcfNcfTTM": "pcf_ncf_ttm",
+                    "turn": "turnover",
+                }
+            )
             for column in ("open", "high", "low", "close", "volume", "amount"):
                 data[column] = pd.to_numeric(data[column], errors="raise")
+            # 估值字段对亏损/停牌日可能为空字符串，允许缺失但不能错位
+            for column in ("pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover"):
+                data[column] = pd.to_numeric(data[column], errors="coerce")
 
             data = data.set_index("date")
             return data[~data.index.duplicated(keep="first")].sort_index()

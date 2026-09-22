@@ -191,3 +191,35 @@ class DataCatalogContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValuationFactorTests(unittest.TestCase):
+    """估值因子使用数据源日频估值字段，禁止复权价自算口径。"""
+
+    def test_valuation_implementations_registered(self):
+        from backend.app.services.factors import ALLOWED_IMPLEMENTATIONS, FACTOR_LIBRARY
+        for name in ("ep", "bp", "sp", "cfp", "turnover_level"):
+            self.assertIn(name, ALLOWED_IMPLEMENTATIONS)
+        valuation = [item for item in FACTOR_LIBRARY if item["family"] == "valuation"]
+        self.assertEqual(len(valuation), 5)
+        self.assertEqual(len(FACTOR_LIBRARY), 1000)
+
+    def test_ep_bp_compute_from_source_columns(self):
+        import numpy as np
+        import pandas as pd
+        from backend.app.services.factors import compute_factor
+        frame = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=3),
+            "close": [10.0, 10.0, 10.0],
+            "pe_ttm": [20.0, 10.0, -5.0],
+            "pb_mrq": [2.0, 4.0, 0.0],
+        })
+        ep = compute_factor(frame, "ep", {"window": 1})
+        self.assertEqual(ep.round(4).tolist(), [0.05, 0.1, -0.2])
+        bp = compute_factor(frame, "bp", {"window": 1})
+        self.assertTrue(np.isnan(bp.iloc[2]))
+
+    def test_expression_engine_accepts_valuation_fields(self):
+        from backend.app.services.factors import validate_expression
+        validate_expression("1 / pe_ttm")
+        validate_expression("log(turnover)")
