@@ -3,6 +3,9 @@ import {onMounted,ref} from 'vue'
 import {useRouter} from 'vue-router'
 import {api} from '../api'
 import {ArrowRight,Boxes,BrainCircuit,ChartNoAxesCombined,Database,Plus,RefreshCw} from 'lucide-vue-next'
+import SectionTabs from '../components/SectionTabs.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import {trainingTabs} from '../sections'
 
 const router=useRouter()
 const rows=ref<any[]>([])
@@ -23,6 +26,7 @@ onMounted(load)
 
 <template>
   <section>
+    <SectionTabs :tabs="trainingTabs" label="训练段页签"/>
     <div class="page-intro">
       <div><h2>训练实验</h2><p>从不可变训练样本开始，完成训练验证，再审阅候选模型</p></div>
       <button class="primary" @click="router.push('/experiments/new')"><Plus :size="16"/>新建训练实验</button>
@@ -45,7 +49,7 @@ onMounted(load)
       <div class="data-table">
         <div class="data-row header"><span>实验名称</span><span>算法</span><span>状态</span><span>样本外 ROC AUC</span></div>
         <div v-for="row in rows" :key="row.id" class="data-row">
-          <b>{{row.name}}</b><span>{{row.algorithm}}</span><span><i class="status" :class="row.status">{{row.status}}</i></span><span>{{metric(row,'roc_auc')}}</span>
+          <b>{{row.name}}</b><span>{{row.algorithm}}</span><span><StatusBadge :status="row.status"/></span><span>{{metric(row,'roc_auc')}}</span>
         </div>
         <div v-if="!rows.length&&!loading" class="empty">暂无训练实验，请先准备研究数据集。</div>
       </div>

@@ -5,6 +5,8 @@ import {api} from '../api'
 import {errorMessage} from '../ui'
 import CandlestickTradeChart from '../components/CandlestickTradeChart.vue'
 import TradeTimeline from '../components/TradeTimeline.vue'
+import SectionTabs from '../components/SectionTabs.vue'
+import {trainingTabs} from '../sections'
 import {BarChart3,BrainCircuit,CalendarDays,Database,GitBranch,RefreshCw,ShieldCheck} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
@@ -57,6 +59,7 @@ onMounted(async()=>{
 
 <template>
   <section class="trade-workbench-page">
+    <SectionTabs :tabs="trainingTabs" label="训练段页签"/>
     <div class="page-intro"><div><span class="eyebrow">MODEL-TO-TRADE</span><h2>模型交易工作台</h2><p>把不可变因子、调参区 OOS 预测、横截面排名与真实回测成交放在同一条证据链上。</p></div><button class="primary" :disabled="!modelId" @click="router.push({path:'/backtests/new',query:{model_id:modelId}})"><BarChart3 :size="16"/>用此模型创建回测</button></div>
     <p v-if="error" class="error-box">{{error}}</p>
     <article class="panel workbench-picker"><div class="field"><label>模型版本</label><select v-model="modelId" @change="changeModel"><option v-for="item in models" :key="item.id" :value="item.id">{{item.name}} v{{item.version}} · {{item.algorithm}}</option></select></div><div class="field"><label>真实回测</label><select v-model="backtestId" @change="changeBacktest"><option v-for="item in context?.backtests||[]" :key="item.id" :value="item.id">{{item.created_at.slice(0,16).replace('T',' ')}} · {{item.start_date}} → {{item.end_date}}</option></select></div><div class="field"><label>股票</label><select v-model="symbol" @change="loadTimeline"><option v-for="item in context?.universe||[]" :key="item" :value="item">{{item}}</option></select></div><button class="secondary" :disabled="loading" @click="loadTimeline"><RefreshCw :size="15" :class="{spin:loading}"/>刷新</button></article>

@@ -5,7 +5,7 @@ import {errorMessage} from '../ui'
 import StatusBadge from '../components/StatusBadge.vue'
 import MetricValue from '../components/MetricValue.vue'
 import {
-  Activity,ArrowRight,Boxes,BrainCircuit,Database,FlaskConical,Layers3,RefreshCw,Sparkles,WalletCards,
+  Activity,ArrowRight,Boxes,BrainCircuit,Database,Filter,FlaskConical,Layers3,RefreshCw,Sparkles,WalletCards,
 } from 'lucide-vue-next'
 
 // 首页是状态驱动的工作台，不是流程说明书：先根据项目已有什么，给出唯一
@@ -22,12 +22,12 @@ interface RecentAsset{
 
 const sourceLabels:Record<string,string>={
   versions:'数据版本',snapshots:'特征快照',datasets:'研究数据集',experiments:'训练实验',
-  models:'模型版本',backtests:'回测记录',jobs:'计算任务',
+  models:'模型版本',backtests:'回测记录',jobs:'计算任务',paper:'模拟账户',
 }
 const loading=ref(true),refreshing=ref(false),online=ref(false)
 const failures=ref<Record<string,string>>({})
 const versions=ref<any[]>([]),snapshots=ref<any[]>([])
-const datasets=ref<any[]>([]),experiments=ref<any[]>([]),models=ref<any[]>([]),backtests=ref<any[]>([]),jobs=ref<any[]>([])
+const datasets=ref<any[]>([]),experiments=ref<any[]>([]),models=ref<any[]>([]),backtests=ref<any[]>([]),jobs=ref<any[]>([]),paperAccounts=ref<any[]>([])
 
 // 每个列表独立 try/catch：单个接口失败只影响对应区块，并把失败原因显示
 // 出来，绝不静默折算成 0 或“暂无数据”。
@@ -43,13 +43,15 @@ async function load(){
   try{
     try{online.value=(await rootApi.get('/health/ready')).data.status==='ready'}
     catch{online.value=false}
-    const [versionRows,snapshotRows,datasetRows,experimentRows,modelRows,backtestRows,jobRows]=await Promise.all([
+    const [versionRows,snapshotRows,datasetRows,experimentRows,modelRows,backtestRows,jobRows,accountRows]=await Promise.all([
       request('versions','/data-center/versions'),request('snapshots','/data-center/materializations'),
       request('datasets','/datasets'),request('experiments','/experiments'),
       request('models','/models'),request('backtests','/backtests'),request('jobs','/jobs'),
+      request('paper','/paper/accounts'),
     ])
     versions.value=versionRows;snapshots.value=snapshotRows;datasets.value=datasetRows
     experiments.value=experimentRows;models.value=modelRows;backtests.value=backtestRows;jobs.value=jobRows
+    paperAccounts.value=accountRows
   }finally{loading.value=false}
 }
 async function refresh(){refreshing.value=true;try{await load()}finally{refreshing.value=false}}
@@ -73,12 +75,12 @@ function metricText(item:{key:string;value:number}){
 }
 
 const nextStep=computed(()=>{
-  if(!standardized.value.length)return{label:'同步第一份标准化行情',note:'项目还没有可用的标准化数据版本，先确定股票池并完成质量门禁。',action:'去数据与标的',to:'/data-center',icon:Layers3}
+  if(!standardized.value.length)return{label:'同步第一份标准化行情',note:'项目还没有可用的标准化数据版本，先确定股票池并完成质量门禁。',action:'去获取数据',to:'/data-center',icon:Layers3}
   if(!readySnapshots.value.length)return{label:'生成特征快照',note:'行情已就绪但还没有因子快照，没有快照就无法构建训练样本。',action:'去生成快照',to:'/data-center',icon:Sparkles}
   if(!readyDatasets.value.length)return{label:'构建研究数据集',note:'快照已就绪，把因子、标签和预测周期固化成不可变训练样本。',action:'去建数据集',to:'/datasets/new',icon:Database}
   if(!models.value.length)return{label:'训练并验证模型',note:'已有训练数据集，但还没有登记任何模型版本。',action:'去训练模型',to:'/experiments/new',icon:BrainCircuit}
   if(!backtests.value.length)return{label:'运行组合回测',note:'模型已登记，用样本外预测检验成本、收益和回撤。',action:'去回测',to:'/backtests/new',icon:FlaskConical}
-  return{label:'进入模拟盘验证',note:'研究链路已经完整，可以在模拟账户上用模型信号验证交易规则。',action:'去模拟交易',to:'/paper',icon:WalletCards}
+  return{label:'进入模拟盘验证',note:'研究链路已经完整，可以在模拟账户上用模型信号验证交易规则。',action:'去模拟盘',to:'/paper',icon:WalletCards}
 })
 
 function stamp(value?:string|null){
@@ -132,6 +134,34 @@ const freshness=computed(()=>{
     hash:version.content_sha256?String(version.content_sha256).slice(0,12):null,
   }
 })
+
+// 首页顶部的五段流状态条：每段只回答“最近产物是什么、什么状态、什么时候”，
+// 有产物就直接进详情，没有产物就给出该段的第一个动作。
+function newest(items:any[]){
+  return [...items].sort((left,right)=>new Date(right?.created_at||0).getTime()-new Date(left?.created_at||0).getTime())[0]||null
+}
+const latestTraining=computed(()=>newest([
+  ...datasets.value.map(item=>({name:item.name,status:item.status,created_at:item.created_at,to:'/datasets'})),
+  ...experiments.value.map(item=>({name:item.name,status:item.status,created_at:item.created_at,to:'/experiments'})),
+  ...models.value.map(item=>({name:item.name,status:item.stage,created_at:item.created_at,to:`/models/${item.id}`})),
+]))
+function versionTitle(item:any){return item?.specification?.name||`${item?.layer||'标准化'}数据版本`}
+const flowCards=computed(()=>{
+  const version=latestVersion.value,snapshot=newest(readySnapshots.value),training=latestTraining.value
+  const backtest=newest(backtests.value),account=newest(paperAccounts.value)
+  return [
+    {key:'data',label:'获取数据',icon:Layers3,to:version?`/data-center/versions/${version.id}`:'/data-center',asset:Boolean(version),
+      title:version?versionTitle(version):'还没有标准化数据版本，先同步一份行情',status:version?.status||null,created_at:version?.created_at||null},
+    {key:'factor',label:'因子',icon:Filter,to:snapshot?`/data-center/snapshots/${snapshot.id}`:'/data-center?focus=snapshots',asset:Boolean(snapshot),
+      title:snapshot?snapshot.name:'还没有因子快照，先在数据段把因子固化成快照',status:snapshot?.status||null,created_at:snapshot?.created_at||null},
+    {key:'train',label:'训练',icon:BrainCircuit,to:training?.to||'/datasets/new',asset:Boolean(training),
+      title:training?training.name:'还没有训练产物，先构建研究数据集',status:training?.status||null,created_at:training?.created_at||null},
+    {key:'backtest',label:'回测',icon:FlaskConical,to:backtest?`/backtests/${backtest.id}`:'/backtests/new',asset:Boolean(backtest),
+      title:backtest?backtestName(backtest):'还没有回测记录，用模型信号跑一次组合回测',status:null,created_at:backtest?.created_at||null},
+    {key:'paper',label:'模拟盘',icon:WalletCards,to:'/paper',asset:Boolean(account),
+      title:account?account.name:'还没有模拟账户，用虚拟资金验证交易规则',status:account?.status||null,created_at:account?.created_at||null},
+  ]
+})
 </script>
 
 <template>
@@ -142,6 +172,14 @@ const freshness=computed(()=>{
     </div>
 
     <p v-if="failureList.length" class="error-box">部分数据加载失败（其余区块按已返回的数据展示，结果可能不完整）：{{failureList.join('；')}}</p>
+
+    <nav class="flow-strip" aria-label="五段研究流状态">
+      <RouterLink v-for="card in flowCards" :key="card.key" class="flow-card" :class="{missing:!card.asset}" :to="card.to">
+        <div class="flow-card-head"><span class="flow-icon"><component :is="card.icon" :size="16"/></span><span>{{card.label}}</span><ArrowRight :size="14"/></div>
+        <b>{{card.title}}</b>
+        <div class="flow-meta"><StatusBadge v-if="card.status" :status="card.status"/><small>{{card.created_at?stamp(card.created_at):'还没有产物'}}</small></div>
+      </RouterLink>
+    </nav>
 
     <article class="panel next-step">
       <div class="next-step-icon"><component :is="nextStep.icon" :size="22"/></div>
@@ -167,7 +205,7 @@ const freshness=computed(()=>{
             <MetricValue v-if="item.metric" :value="item.metric.value" :mode="item.metric.mode" :tone="item.metric.tone"/>
             <ArrowRight :size="14"/>
           </RouterLink>
-          <div v-if="!recentAssets.length&&!loading" class="empty">还没有研究产物，请从数据与标的开始。</div>
+          <div v-if="!recentAssets.length&&!loading" class="empty">还没有研究产物。先到“获取数据”同步一份行情，数据集、模型和回测会依次出现在这里。</div>
         </div>
       </article>
 
@@ -210,12 +248,14 @@ const freshness=computed(()=>{
             <RouterLink class="job-target" :to="jobTarget(job).to">{{jobTarget(job).label}}<ArrowRight :size="13"/></RouterLink><small>{{stamp(job.created_at)}}</small>
           </div>
         </div>
-        <div v-if="!runningJobs.length&&!failedJobs.length&&!succeededJobs.length" class="empty">暂无计算任务，请从数据与标的开始。</div>
+        <div v-if="!runningJobs.length&&!failedJobs.length&&!succeededJobs.length" class="empty">暂无计算任务。同步数据、训练模型或运行回测后，任务会实时出现在这里。</div>
       </template>
     </article>
   </section>
 </template>
 
 <style scoped>
-.next-step{display:flex;align-items:center;gap:16px;margin:16px 0}.next-step-icon{width:46px;height:46px;flex:none;border-radius:12px;background:#e8f3ff;color:#1768d7;display:grid;place-items:center}.next-step>div:nth-child(2){min-width:0;flex:1}.next-step small{color:#1768d7;font-size:10px;font-weight:700;letter-spacing:1px}.next-step h3{font:700 17px Manrope;margin:5px 0 4px}.next-step p{margin:0;color:#7f8b9c;font-size:12px;line-height:1.6}.next-step .link-button{flex:none}.metric .stale{font-size:15px;color:#b73842}.timeline{margin-top:8px}.timeline-row{display:flex;align-items:center;gap:12px;padding:13px 4px;border-top:1px solid #edf0f4;color:inherit;text-decoration:none}.timeline-row:hover{background:#f7fafd}.timeline-kind{width:62px;flex:none;color:#8793a3;font-size:10px;font-weight:700;letter-spacing:.5px}.timeline-row>div{min-width:0;flex:1}.timeline-row b,.timeline-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.timeline-row b{color:#2f4057;font-size:13px}.timeline-row small{margin-top:4px;color:#8b97a7;font-size:10px}.timeline-row>.metric-value{flex:none;color:#34455b;font-size:12px;font-weight:700}.timeline-row>svg{color:#a1adbb}.freshness-list{margin:12px 0 0}.freshness-list div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-top:1px solid #edf0f4;font-size:12px}.freshness-list dt{color:#7c8999}.freshness-list dd{margin:0;font-weight:600;overflow-wrap:anywhere}.freshness-list code{font-size:11px}.freshness-panel-link{width:fit-content;margin-top:10px;text-decoration:none}.job-block{margin-top:14px}.job-block h4{display:flex;align-items:center;gap:6px;margin:0 0 6px;color:#526176;font-size:11px;font-weight:700}.job-block h4.danger{color:#b73842}.job-line{display:flex;align-items:center;gap:10px;padding:11px 4px;border-top:1px solid #edf0f4;font-size:12px}.job-line b{min-width:130px;color:#35445a;font-size:12px}.job-line small{margin-left:auto;color:#8b97a7;font-size:10px}.job-progress-text{color:#5d6b7f;font-weight:700}.failure-reason{min-width:0;flex:1;overflow:hidden;color:#c3494f;text-overflow:ellipsis;white-space:nowrap}.job-target{margin-left:auto;display:flex;align-items:center;gap:4px;color:#1768d7;font-size:11px;text-decoration:none}.job-target+small{margin-left:12px}@media(max-width:900px){.next-step{align-items:flex-start;flex-wrap:wrap}.next-step .link-button{margin-left:62px}.job-line{flex-wrap:wrap}.failure-reason{flex-basis:100%}.job-line b{min-width:0}.job-target{margin-left:0}}
+.flow-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:16px 0}
+.flow-card{display:grid;gap:8px;padding:14px;border:1px solid #e6ebf1;border-radius:12px;background:#fff;box-shadow:0 3px 12px #1f385208;color:inherit;text-decoration:none;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}.flow-card:hover{border-color:#c8dafa;box-shadow:0 9px 22px #1f385218;transform:translateY(-1px)}.flow-card.missing{border-style:dashed;box-shadow:none}.flow-card-head{display:flex;align-items:center;gap:8px;color:#7c8999;font-size:11px;font-weight:700}.flow-card-head>svg{margin-left:auto;color:#b6c0cc}.flow-icon{width:26px;height:26px;flex:none;border-radius:8px;background:#edf5ff;color:#2872d2;display:grid;place-items:center}.flow-card b{color:#2f4057;font-size:13px;line-height:1.5;overflow-wrap:anywhere}.flow-card.missing b{color:#8b97a7;font-weight:600}.flow-meta{display:flex;align-items:center;gap:8px}.flow-meta small{color:#8b97a7;font-size:10px}
+.next-step{display:flex;align-items:center;gap:16px;margin:16px 0}.next-step-icon{width:46px;height:46px;flex:none;border-radius:12px;background:#e8f3ff;color:#1768d7;display:grid;place-items:center}.next-step>div:nth-child(2){min-width:0;flex:1}.next-step small{color:#1768d7;font-size:10px;font-weight:700;letter-spacing:1px}.next-step h3{font:700 17px Manrope;margin:5px 0 4px}.next-step p{margin:0;color:#7f8b9c;font-size:12px;line-height:1.6}.next-step .link-button{flex:none}.metric .stale{font-size:15px;color:#b73842}.timeline{margin-top:8px}.timeline-row{display:flex;align-items:center;gap:12px;padding:13px 4px;border-top:1px solid #edf0f4;color:inherit;text-decoration:none}.timeline-row:hover{background:#f7fafd}.timeline-kind{width:62px;flex:none;color:#8793a3;font-size:10px;font-weight:700;letter-spacing:.5px}.timeline-row>div{min-width:0;flex:1}.timeline-row b,.timeline-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.timeline-row b{color:#2f4057;font-size:13px}.timeline-row small{margin-top:4px;color:#8b97a7;font-size:10px}.timeline-row>.metric-value{flex:none;color:#34455b;font-size:12px;font-weight:700}.timeline-row>svg{color:#a1adbb}.freshness-list{margin:12px 0 0}.freshness-list div{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-top:1px solid #edf0f4;font-size:12px}.freshness-list dt{color:#7c8999}.freshness-list dd{margin:0;font-weight:600;overflow-wrap:anywhere}.freshness-list code{font-size:11px}.freshness-panel-link{width:fit-content;margin-top:10px;text-decoration:none}.job-block{margin-top:14px}.job-block h4{display:flex;align-items:center;gap:6px;margin:0 0 6px;color:#526176;font-size:11px;font-weight:700}.job-block h4.danger{color:#b73842}.job-line{display:flex;align-items:center;gap:10px;padding:11px 4px;border-top:1px solid #edf0f4;font-size:12px}.job-line b{min-width:130px;color:#35445a;font-size:12px}.job-line small{margin-left:auto;color:#8b97a7;font-size:10px}.job-progress-text{color:#5d6b7f;font-weight:700}.failure-reason{min-width:0;flex:1;overflow:hidden;color:#c3494f;text-overflow:ellipsis;white-space:nowrap}.job-target{margin-left:auto;display:flex;align-items:center;gap:4px;color:#1768d7;font-size:11px;text-decoration:none}.job-target+small{margin-left:12px}@media(max-width:900px){.next-step{align-items:flex-start;flex-wrap:wrap}.next-step .link-button{margin-left:62px}.job-line{flex-wrap:wrap}.failure-reason{flex-basis:100%}.job-line b{min-width:0}.job-target{margin-left:0}}@media(max-width:1100px){.flow-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:720px){.flow-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

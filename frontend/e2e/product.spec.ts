@@ -10,27 +10,36 @@ test.beforeEach(async({page})=>{
   await expect(page.getByText('QuantForge',{exact:true})).toBeVisible()
 })
 
-test('sidebar groups research objects instead of numbered steps',async({page})=>{
-  const sidebar=page.locator('aside')
-  // 侧栏不再把流程编成 1/2/3 号步骤，而是按研究对象分区。
-  await expect(sidebar.getByRole('link',{name:'研究首页',exact:true})).toBeVisible()
-  for(const label of ['数据与因子','数据集与实验','模型','回测与模拟','任务','平台治理']){
-    await expect(sidebar.getByRole('button',{name:label,exact:true})).toBeVisible()
+test('top bar carries the five-stage research flow',async({page})=>{
+  // 侧栏已经删除：一级导航只有顶栏的五段流，研究首页不参与段高亮。
+  await expect(page.locator('aside')).toHaveCount(0)
+  const topbar=page.locator('header.topbar')
+  for(const label of ['获取数据','因子','训练','回测','模拟盘']){
+    await expect(topbar.getByRole('link',{name:label,exact:true})).toBeVisible()
   }
-  await expect(sidebar.getByRole('link',{name:/^一键研究$/})).toHaveCount(0)
-  await expect(sidebar.getByRole('link',{name:/^[1-6]\s/})).toHaveCount(0)
+  await expect(topbar.locator('.nav-pill.active')).toHaveCount(0)
 
-  await sidebar.getByRole('button',{name:'数据与因子',exact:true}).click()
-  await expect(sidebar.getByRole('link',{name:'数据与标的',exact:true})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:'因子工程',exact:true})).toBeVisible()
+  await topbar.getByRole('link',{name:'训练',exact:true}).click()
+  await expect(page).toHaveURL(/\/experiments$/)
+  await expect(topbar.getByRole('link',{name:'训练',exact:true})).toHaveClass(/active/)
+})
 
-  await sidebar.getByRole('button',{name:'模型',exact:true}).click()
-  await expect(sidebar.getByRole('link',{name:'模型仓库',exact:true})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:'模型比较',exact:true})).toBeVisible()
+test('section tabs replace the sidebar sub-entries',async({page})=>{
+  const topbar=page.locator('header.topbar')
+  await topbar.getByRole('link',{name:'训练',exact:true}).click()
+  const tabs=page.locator('.section-tabs')
+  for(const label of ['训练实验','研究数据集','模型仓库','模型比较']){
+    await expect(tabs.getByRole('link',{name:label,exact:true})).toBeVisible()
+  }
+  await tabs.getByRole('link',{name:'模型比较',exact:true}).click()
+  await expect(page).toHaveURL(/\/models\/compare$/)
+  await expect(page.locator('.section-tab.active')).toHaveText('模型比较')
 
-  await sidebar.getByRole('button',{name:'回测与模拟',exact:true}).click()
-  await expect(sidebar.getByRole('link',{name:'回测中心',exact:true})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:'模拟交易',exact:true})).toBeVisible()
+  // 回测段把策略版本和批量预测收进页签，不再放回侧栏。
+  await page.locator('header.topbar').getByRole('link',{name:'回测',exact:true}).click()
+  for(const label of ['回测中心','策略版本','批量预测']){
+    await expect(page.locator('.section-tabs').getByRole('link',{name:label,exact:true})).toBeVisible()
+  }
 })
 
 test('dashboard shows the recommended next step and recent products',async({page})=>{
@@ -39,7 +48,11 @@ test('dashboard shows the recommended next step and recent products',async({page
   await expect(page.getByRole('heading',{name:'最近产物'})).toBeVisible()
   await expect(page.getByRole('heading',{name:'数据新鲜度'})).toBeVisible()
   await expect(page.getByRole('heading',{name:'任务状态'})).toBeVisible()
-  await expect(page.locator('.core-flow .flow-card')).toHaveCount(0)
+  // 五段流状态条把每段最近产物摆在同一行，点击直达该段或产物详情。
+  await expect(page.locator('.flow-strip .flow-card')).toHaveCount(5)
+  for(const label of ['获取数据','因子','训练','回测','模拟盘']){
+    await expect(page.locator('.flow-strip').getByText(label,{exact:true})).toBeVisible()
+  }
 })
 
 test('global search and notification controls are functional',async({page})=>{
@@ -57,18 +70,22 @@ test('global search and notification controls are functional',async({page})=>{
   await expect(page.getByText('查看全部通知')).toBeVisible()
 })
 
-test('admin product pages and data details are reachable',async({page})=>{
-  await expect(page.getByRole('link',{name:'用户管理'})).not.toBeVisible()
-  await page.getByRole('button',{name:'平台治理'}).click()
+test('admin governance pages and data details are reachable',async({page})=>{
+  // 平台治理从顶栏用户菜单进入，非管理员看不到这几个入口。
+  await expect(page.getByRole('link',{name:'用户管理'})).toHaveCount(0)
+  await page.getByRole('button',{name:'用户菜单'}).click()
+  await expect(page.getByText('平台治理')).toBeVisible()
   await page.getByRole('link',{name:'用户管理'}).click()
   await expect(page.getByRole('heading',{name:'用户管理',level:2})).toBeVisible()
   await expect(page.getByText('admin@quant.local')).toBeVisible()
 
-  await page.getByRole('button',{name:'数据与因子',exact:true}).click()
-  await page.getByRole('link',{name:'数据与标的',exact:true}).click()
+  await page.locator('header.topbar').getByRole('link',{name:'获取数据',exact:true}).click()
   await expect(page.getByText('数据版本与质量')).toBeVisible()
+  // 因子快照是数据段内的页签，用 query 定位到页内快照区，版本详情路由保持不变。
+  await page.locator('.section-tabs').getByRole('link',{name:'因子快照',exact:true}).click()
+  await expect(page).toHaveURL(/focus=snapshots/)
   await page.locator('.product-link-row').first().click()
-  await expect(page.getByRole('heading',{name:'数据质量详情'})).toBeVisible()
+  await expect(page.getByText('数据质量详情',{exact:true})).toBeVisible()
 })
 
 test('model OOS portfolio backtest can be configured',async({page})=>{

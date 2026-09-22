@@ -4,6 +4,8 @@ import {useRoute} from 'vue-router'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import StatusBadge from '../components/StatusBadge.vue'
+import SectionTabs from '../components/SectionTabs.vue'
+import {backtestTabs} from '../sections'
 import {Download,LoaderCircle,Play,RefreshCw,Sparkles} from 'lucide-vue-next'
 
 const route=useRoute()
@@ -69,6 +71,7 @@ onMounted(load)
 
 <template>
   <section>
+    <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
     <div class="page-intro">
       <div><h2>批量预测中心</h2><p>注册模型 × 不可变特征快照 → 可审计预测产物</p></div>
       <button class="secondary" @click="load"><RefreshCw :size="16"/>刷新</button>
@@ -96,7 +99,7 @@ onMounted(load)
           <span>{{row.name}}</span><span><StatusBadge :status="row.status"/></span><span>{{row.row_count||'—'}}</span><span>{{row.summary?.mean_probability??'—'}}</span>
           <span><button v-if="row.status==='succeeded'" class="text-button" @click="download(row)"><Download :size="14"/>下载 Parquet</button></span>
         </div>
-        <div v-if="!rows.length" class="empty">暂无预测任务。</div>
+        <div v-if="!rows.length" class="empty">暂无预测任务。选择一个已登记模型和一份特征快照，即可在上方生成可审计的预测产物。</div>
       </div>
     </article>
   </section>

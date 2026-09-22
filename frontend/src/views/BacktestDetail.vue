@@ -2,6 +2,8 @@
 import {computed,onMounted,ref} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
+import SectionTabs from '../components/SectionTabs.vue'
+import {backtestTabs} from '../sections'
 import {ArrowLeft,BrainCircuit,CalendarDays,Coins,Database,LineChart,ReceiptText,ShieldCheck} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter(),run=ref<any>(null),artifact=ref<any>(null),loading=ref(true),error=ref('')
@@ -37,6 +39,7 @@ function show(value:any,suffix=''){return value===null||value===undefined?'—':
 
 <template>
   <section>
+    <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
     <div class="crumb"><button @click="router.push('/backtests')"><ArrowLeft :size="15"/>返回回测中心</button><span>组合级可信回测报告</span></div>
     <div v-if="loading" class="panel empty">正在加载报告…</div>
     <div v-else-if="error" class="panel error-box">{{error}}</div>

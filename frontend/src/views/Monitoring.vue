@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,ref} from 'vue'
 import {api,rootApi} from '../api'
+import StatusBadge from '../components/StatusBadge.vue'
 import {
   Activity,AlertTriangle,CheckCircle2,Clock3,Database,Play,
   RefreshCw,ShieldAlert,SlidersHorizontal,
@@ -111,7 +112,7 @@ onUnmounted(()=>window.clearInterval(timer))
         <div class="data-row header with-action"><span>计划 / 算法</span><span>状态</span><span>下次运行</span><span>上次任务</span><span>操作</span></div>
         <div v-for="item in schedules" :key="item.id" class="data-row with-action">
           <span>{{item.name}}<small>{{item.algorithm}} · 每 {{item.interval_minutes}} 分钟</small></span>
-          <span><i class="status" :class="item.enabled?'succeeded':'archived'">{{item.enabled?'enabled':'paused'}}</i></span>
+          <span><StatusBadge :status="item.enabled?'enabled':'paused'"/></span>
           <span>{{time(item.next_run_at)}}</span><span><code>{{item.last_job_id?.slice(0,8)||'—'}}</code></span>
           <span class="row-actions"><button class="text-button" :disabled="busy" @click="runSchedule(item)">立即运行</button><button class="text-button" :disabled="busy" @click="toggleSchedule(item)">{{item.enabled?'暂停':'启用'}}</button></span>
         </div>
@@ -124,8 +125,8 @@ onUnmounted(()=>window.clearInterval(timer))
       <div class="data-table">
         <div class="data-row header"><span>时间 / 状态</span><span>告警级别</span><span>最大特征 PSI</span><span>预测分数 PSI</span></div>
         <div v-for="item in driftRuns" :key="item.id" class="data-row">
-          <span>{{time(item.created_at)}}<small>{{item.status}}</small></span>
-          <span><i class="status" :class="item.alert_level">{{item.alert_level}}</i></span>
+          <span>{{time(item.created_at)}}<StatusBadge :status="item.status"/></span>
+          <span><StatusBadge :status="item.alert_level"/></span>
           <span>{{item.metrics?.max_feature_psi??'—'}}</span><span>{{item.metrics?.score_psi??'—'}}</span>
         </div>
         <div v-if="!driftRuns.length" class="empty">暂无漂移检查。</div>

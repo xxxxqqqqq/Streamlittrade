@@ -3,6 +3,8 @@ import {computed,onMounted,ref,watch} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
+import SectionTabs from '../components/SectionTabs.vue'
+import {backtestTabs} from '../sections'
 import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
@@ -145,6 +147,7 @@ async function submit(){
 
 <template>
   <section class="workflow">
+    <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
     <div class="crumb"><button @click="router.push('/backtests')"><ArrowLeft :size="15"/>返回回测中心</button><span>组合级可信回测</span></div>
     <article class="panel form-card">
       <div class="form-heading"><div class="feature-icon"><BrainCircuit v-if="modelMode" :size="23"/><BarChart3 v-else :size="23"/></div><div><h2>{{modelMode?'创建模型组合回测':'创建可复现策略回测'}}</h2><p>{{modelMode?'使用 Purged Walk-Forward 产生的样本外概率构建组合，自动锁定模型训练时的数据血缘。':'绑定不可变数据版本与策略版本，历史结果不会被后续参数修改污染。'}}</p></div></div>

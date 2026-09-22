@@ -6,6 +6,8 @@ import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import StatusBadge from '../components/StatusBadge.vue'
 import MetricValue from '../components/MetricValue.vue'
+import SectionTabs from '../components/SectionTabs.vue'
+import {trainingTabs} from '../sections'
 import {ArrowLeft,Boxes,CalendarDays,Database,GitBranch,RotateCcw,ShieldCheck,Sparkles} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter(),model=ref<any>(null),sealed=ref<any>(null),loading=ref(true),error=ref('')
@@ -59,6 +61,7 @@ async function openSealed(){
 
 <template>
   <section class="workflow">
+    <SectionTabs :tabs="trainingTabs" label="训练段页签"/>
     <div class="crumb"><button @click="router.push('/models')"><ArrowLeft :size="15"/>返回模型仓库</button><span>研究流程 · 第 3/3 步</span></div>
     <div v-if="loading" class="panel empty">正在读取模型结果…</div>
     <div v-else-if="error&&!model" class="panel error-box">{{error}}</div>

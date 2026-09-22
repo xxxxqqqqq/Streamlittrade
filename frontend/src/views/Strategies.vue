@@ -3,6 +3,8 @@ import {computed,onMounted,ref} from 'vue'
 import {useRouter} from 'vue-router'
 import {api} from '../api'
 import {FlaskConical,Plus,RefreshCw,ScrollText} from 'lucide-vue-next'
+import SectionTabs from '../components/SectionTabs.vue'
+import {backtestTabs} from '../sections'
 
 const router=useRouter()
 const rows=ref<any[]>([])
@@ -59,6 +61,7 @@ onMounted(load)
 
 <template>
   <section>
+    <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
     <div class="page-intro">
       <div><h2>策略版本管理</h2><p>平台审核过的内置实现与不可变参数版本</p></div>
       <button class="secondary" @click="load"><RefreshCw :size="16" :class="{spin:loading}"/>刷新</button>
@@ -99,7 +102,7 @@ onMounted(load)
           <span class="parameter-cell"><span v-for="[label,value] in parameterEntries(row)" :key="label">{{label}} {{value}}</span><span v-if="!parameterEntries(row).length">无参数</span></span>
           <span><button class="text-button" @click="backtest(row)"><FlaskConical :size="13"/>用此版本回测</button></span>
         </div>
-        <div v-if="!rows.length&&!loading" class="empty">尚未登记策略版本。</div>
+        <div v-if="!rows.length&&!loading" class="empty">尚未登记策略版本。在上方创建右侧趋势或 V 型反转策略版本后，就能用它发起可复现回测。</div>
       </div>
     </article>
   </section>

@@ -3,6 +3,8 @@ import {computed,onMounted,ref} from 'vue'
 import {useRouter} from 'vue-router'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
+import SectionTabs from '../components/SectionTabs.vue'
+import {trainingTabs} from '../sections'
 import {ArrowLeft,ArrowRight,CheckCircle2,Database,LoaderCircle} from 'lucide-vue-next'
 
 const router=useRouter()
@@ -112,6 +114,7 @@ async function submit(){
 
 <template>
   <section class="workflow">
+    <SectionTabs :tabs="trainingTabs" label="训练段页签"/>
     <div class="crumb">
       <button @click="router.push('/datasets')"><ArrowLeft :size="15"/>返回数据集</button>
       <span>研究流程 · 第 1/3 步</span>

@@ -5,6 +5,8 @@ import {useRouter} from 'vue-router'
 import Paginator from '../components/Paginator.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import MetricValue from '../components/MetricValue.vue'
+import SectionTabs from '../components/SectionTabs.vue'
+import {backtestTabs,trainingTabs} from '../sections'
 import {statusLabel} from '../status'
 import {BrainCircuit,Download,Eye,GitBranch,Plus,RefreshCw,Search,Sparkles} from 'lucide-vue-next'
 import {downloadApiFile} from '../download'
@@ -13,6 +15,9 @@ const rows=ref<any[]>([]),loading=ref(false),query=ref(''),statusFilter=ref(''),
 const models=ref<any[]>([])
 const datasetDownloadId=ref(''),datasetDownloadError=ref('')
 const labels:any={backtests:['回测中心','查看模型组合或规则策略在历史行情中的表现'],datasets:['研究数据集','将因子快照、预测标签和数据血缘固化为训练输入'],models:['模型仓库','管理候选、验证与生产模型'],strategies:['策略版本','维护策略定义和参数版本'],jobs:['计算任务','监控排队、运行和失败任务']}
+// 同一个列表组件同时服务训练段和回测段，页签跟着 kind 走：用户在任何一张
+// 列表里都能看清自己处在五段流的哪一段。
+const tabs=computed(()=>props.kind==='backtests'?backtestTabs:props.kind==='datasets'||props.kind==='models'?trainingTabs:null)
 const matching=computed(()=>rows.value.filter(item=>(!query.value||JSON.stringify(item).toLowerCase().includes(query.value.toLowerCase()))&&(!statusFilter.value||(item.status||item.stage)===statusFilter.value)))
 const paged=computed(()=>matching.value.slice((page.value-1)*pageSize.value,page.value*pageSize.value))
 const availableStatuses=computed(()=>[...new Set(rows.value.map(item=>item.status||item.stage).filter(Boolean))])
@@ -84,6 +89,7 @@ function predict(row:any){router.push({path:'/predictions',query:{model_id:row.i
 </script>
 <template>
   <section>
+    <SectionTabs v-if="tabs" :tabs="tabs"/>
     <div class="page-intro" :class="{'model-page-intro':kind==='models'}">
       <div><h2>{{labels[kind][0]}}</h2><p>{{labels[kind][1]}}</p></div>
       <button v-if="['datasets','backtests'].includes(kind)" class="primary" @click="create"><Plus :size="16"/>新建{{labels[kind][0]}}</button>
@@ -117,7 +123,7 @@ function predict(row:any){router.push({path:'/predictions',query:{model_id:row.i
           <div class="date-cell"><b>{{period(row)}}</b><small>创建于 {{createdAt(row.created_at)}}</small></div>
           <div class="backtest-action"><button class="text-button" @click="router.push('/backtests/'+row.id)"><Eye :size="14"/>查看报告</button></div>
         </article>
-        <div v-if="!matching.length&&!loading" class="empty">暂无回测记录。</div>
+        <div v-if="!matching.length&&!loading" class="empty">暂无回测记录。用模型信号或策略版本发起一次回测，报告会出现在这里。</div>
       </div>
 
       <div v-else-if="kind==='models'" class="model-list">
@@ -152,13 +158,13 @@ function predict(row:any){router.push({path:'/predictions',query:{model_id:row.i
           <span>{{row.name}}</span><span><StatusBadge :status="row.status"/></span><span>{{display(row.row_count)}}</span><span>{{display(row.created_at)}}</span>
           <span><button class="text-button" :disabled="row.status!=='ready'||!row.artifact_uri||Boolean(datasetDownloadId)" @click="downloadDataset(row)"><Download :size="14"/>{{datasetDownloadId===row.id?'正在下载…':'下载 Parquet'}}</button></span>
         </div>
-        <div v-if="!matching.length&&!loading" class="empty">暂无数据。</div>
+        <div v-if="!matching.length&&!loading" class="empty">暂无研究数据集。先准备因子快照，再把因子、标签和预测周期固化成训练样本。</div>
       </div>
 
       <div v-else class="data-table">
         <div class="data-row header"><span v-for="column in columns" :key="column">{{column.replace('_',' ')}}</span></div>
         <div v-for="row in paged" :key="row.id" class="data-row"><span v-for="column in columns" :key="column"><StatusBadge v-if="column==='status'||column==='stage'" :status="row[column]"/><template v-else>{{display(row[column])}}</template></span></div>
-        <div v-if="!matching.length&&!loading" class="empty">暂无数据。</div>
+        <div v-if="!matching.length&&!loading" class="empty">暂无记录。这个列表由平台的异步任务写入，发起对应任务后会自动出现。</div>
       </div>
       <Paginator :page="page" :total="matching.length" :page-size="pageSize" @change="value=>page=value"/>
     </article>

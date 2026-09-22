@@ -25,18 +25,18 @@ import AuditLogs from './views/AuditLogs.vue'
 import Notifications from './views/Notifications.vue'
 import {authenticated,user} from './auth'
 
-// meta.title 与侧栏导航标签保持一致：同一功能只允许一个名字，避免用户
-// 在侧栏、页头和页内标题里看到三种叫法。
+// meta.title 与顶栏五段流、段内页签保持同一套叫法：同一功能只允许一个名字，
+// 避免用户在顶栏、页签和浏览器标签页里看到三种称呼。
 export const router=createRouter({
   history:createWebHistory(),
   routes:[
     {path:'/login',component:Login,meta:{title:'登录',public:true}},
-    {path:'/',component:Dashboard,meta:{title:'研究首页'}},
-    {path:'/data-center',component:DataCenter,meta:{title:'数据与标的'}},
-    {path:'/factor-research',component:FactorResearch,meta:{title:'因子工程'}},
+    {path:'/',component:Dashboard,meta:{title:'研究工作台'}},
+    {path:'/data-center',component:DataCenter,meta:{title:'获取数据'}},
+    {path:'/factor-research',component:FactorResearch,meta:{title:'因子研究'}},
     {path:'/data-center/versions/:id',component:DataVersionDetail,meta:{title:'数据质量详情'}},
     {path:'/data-center/snapshots/:id',component:SnapshotDetail,meta:{title:'特征快照详情'}},
-    {path:'/paper',component:PaperTrading,meta:{title:'模拟交易'}},
+    {path:'/paper',component:PaperTrading,meta:{title:'模拟盘'}},
     {path:'/monitoring',component:Monitoring,meta:{title:'生产运行',admin:true}},
     {path:'/notifications',component:Notifications,meta:{title:'通知中心'}},
     {path:'/projects',component:Projects,meta:{title:'项目与成员',admin:true}},
@@ -57,7 +57,7 @@ export const router=createRouter({
     {path:'/models',component:Records,props:{kind:'models'},meta:{title:'模型仓库'}},
     {path:'/predictions',component:Predictions,meta:{title:'批量预测'}},
     {path:'/strategies',component:Strategies,meta:{title:'策略版本'}},
-    {path:'/jobs',component:Jobs,meta:{title:'计算任务'}},
+    {path:'/jobs',component:Jobs,meta:{title:'任务中心'}},
   ],
 })
 

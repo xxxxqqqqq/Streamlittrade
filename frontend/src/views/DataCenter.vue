@@ -1,14 +1,25 @@
 <script setup lang="ts">
 import {computed,onMounted,ref,watch} from 'vue'
-import {useRouter} from 'vue-router'
+import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
 import DataJobProgress from '../components/DataJobProgress.vue'
+import SectionTabs from '../components/SectionTabs.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import {dataTabs} from '../sections'
 import {Check,CheckCircle2,ChevronDown,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
 
-const router=useRouter()
+const router=useRouter(),route=useRoute()
+
+// “因子快照”页签用 ?focus=snapshots 直达页内快照区，不再为同一张表另造路由。
+const snapshotPanel=ref<HTMLElement|null>(null)
+function revealSnapshotPanel(){
+  if(route.query.focus!=='snapshots')return
+  window.requestAnimationFrame(()=>snapshotPanel.value?.scrollIntoView({behavior:'smooth',block:'start'}))
+}
+watch(()=>route.query.focus,revealSnapshotPanel)
 
 const sources=ref<any[]>([])
 const versions=ref<any[]>([])
@@ -18,6 +29,8 @@ const factorLibrary=ref<any[]>([])
 const error=ref('')
 const notice=ref('')
 const busy=ref(false)
+// 首屏还没拿到列表时不渲染“还没有数据版本”，避免把加载中误报成空状态。
+const loaded=ref(false)
 type DataJobOperation='sync'|'materialize'
 const activeJob=ref<any|null>(null)
 const activeOperation=ref<DataJobOperation|null>(null)
@@ -218,6 +231,7 @@ async function load(){
   if(!materialForm.value.feature_definition_ids.length&&currentFactors.value.length){
     materialForm.value.feature_definition_ids=currentFactors.value.map(item=>item.id)
   }
+  loaded.value=true
 }
 
 const pendingJobKey=()=>`quant_data_center_job:${selectedProjectId.value||'default'}`
@@ -284,6 +298,7 @@ onMounted(async()=>{
   }catch(exception:any){
     error.value=exception.response?.data?.detail||exception.message
   }
+  revealSnapshotPanel()
 })
 
 async function createSource(){
@@ -425,6 +440,7 @@ function clearSelectedFactors(){
 
 <template>
   <section>
+    <SectionTabs :tabs="dataTabs" label="获取数据段页签"/>
     <div class="hero">
       <div>
         <span class="eyebrow">DATA TO MODEL FACTORS</span>
@@ -480,7 +496,7 @@ function clearSelectedFactors(){
             <div v-if="selectedSource" class="selection-summary">
               <b>{{selectedSource.name}}</b>
               <span>{{String(selectedSource.provider).toUpperCase()}} · {{selectedSource.slug}}</span>
-              <i class="status succeeded">ACTIVE</i>
+              <StatusBadge :status="selectedSource.status"/>
             </div>
           </div>
           <details v-if="isAdmin" class="advanced-source">
@@ -783,29 +799,32 @@ function clearSelectedFactors(){
         <div class="tr th"><span>数据名称 / 层级</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
         <RouterLink v-for="version in versions" :key="version.id" class="tr product-link-row" :to="`/data-center/versions/${version.id}`">
           <b>{{dataVersionName(version)}} · {{version.layer}}</b>
-          <span><i class="status" :class="version.status">{{version.status}}</i></span>
+          <span><StatusBadge :status="version.status"/></span>
           <span>{{version.row_count||'—'}}</span>
           <code>{{version.content_sha256?.slice(0,16)||'—'}}</code>
         </RouterLink>
+        <div v-if="loaded&&!versions.length" class="empty">还没有数据版本，请先在第 2 步同步行情并通过质量门禁。</div>
       </div>
     </article>
 
-    <article class="panel">
+    <article ref="snapshotPanel" class="panel" :class="{'panel-focus':route.query.focus==='snapshots'}">
       <div class="panel-head"><div><h3>特征快照</h3><p>分布画像、缺失率和完整血缘</p></div></div>
       <div class="table">
         <div class="tr th"><span>名称</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
         <RouterLink v-for="snapshot in snapshots" :key="snapshot.id" class="tr product-link-row" :to="`/data-center/snapshots/${snapshot.id}`">
           <b>{{snapshot.name}}</b>
-          <span><i class="status" :class="snapshot.status">{{snapshot.status}}</i></span>
+          <span><StatusBadge :status="snapshot.status"/></span>
           <span>{{snapshot.row_count||'—'}}</span>
           <code>{{snapshot.content_sha256?.slice(0,16)||'—'}}</code>
         </RouterLink>
+        <div v-if="loaded&&!snapshots.length" class="empty">还没有特征快照，请先在第 3 步登记模型因子，再用第 4 步生成快照。</div>
       </div>
     </article>
   </section>
 </template>
 
 <style scoped>
+.panel-focus{border-color:#bcd4f7;box-shadow:0 0 0 3px #1667d914,0 3px 12px #1f385208}
 .pipeline-notice{display:flex;align-items:center;gap:8px;margin:14px 0 0;padding:11px 14px;border:1px solid #bce8d9;border-radius:9px;background:#eaf8f3;color:#157b59;font-size:12px}
 .pipeline-progress{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:18px 0;overflow:hidden;border:1px solid #dfe6ef;border-radius:11px;background:#fff}
 .pipeline-progress-item{display:flex;align-items:center;gap:10px;min-width:0;padding:13px 15px;position:relative}

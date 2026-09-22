@@ -8,6 +8,7 @@ export const STATUS_LABELS:Record<string,string>={
   enabled:'已启用',paused:'已暂停',active:'正常',frozen:'已冻结',disabled:'已停用',
   eligible:'可通过',blocked:'被拦截',
   proposed:'待复核',filled:'已成交',rejected:'已拒绝',
+  none:'正常',warning:'警告',critical:'严重',
 }
 
 const STATUS_TONES:Record<string,string>={
@@ -18,6 +19,7 @@ const STATUS_TONES:Record<string,string>={
   enabled:'succeeded',paused:'archived',active:'succeeded',frozen:'archived',disabled:'archived',
   eligible:'succeeded',blocked:'failed',
   proposed:'pending',filled:'succeeded',rejected:'failed',
+  none:'',warning:'pending',critical:'failed',
 }
 
 export function statusLabel(status?:string|null){

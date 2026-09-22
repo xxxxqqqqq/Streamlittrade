@@ -4,6 +4,8 @@ import {useRoute} from 'vue-router'
 import {Activity,CheckCircle2,Filter,FlaskConical,RefreshCw,XCircle} from 'lucide-vue-next'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
+import SectionTabs from '../components/SectionTabs.vue'
+import {factorTabs} from '../sections'
 
 const route=useRoute()
 
@@ -87,6 +89,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 
 <template>
   <section>
+    <SectionTabs :tabs="factorTabs" label="因子段页签"/>
     <div class="hero factor-hero">
       <div>
         <span class="eyebrow">FACTOR RESEARCH & SCREENING</span>

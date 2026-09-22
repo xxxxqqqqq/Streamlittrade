@@ -4,6 +4,9 @@ import {useRoute,useRouter} from 'vue-router'
 import {AlertTriangle,ArrowLeft,CheckCircle2,Download,GitBranch,Sparkles} from 'lucide-vue-next'
 import {api} from '../api'
 import {downloadApiFile} from '../download'
+import SectionTabs from '../components/SectionTabs.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import {dataTabs} from '../sections'
 
 const route=useRoute()
 const router=useRouter()
@@ -53,6 +56,7 @@ onMounted(async()=>{
 
 <template>
   <section class="workflow">
+    <SectionTabs :tabs="dataTabs" label="获取数据段页签"/>
     <div class="crumb"><button @click="router.push('/data-center')"><ArrowLeft :size="15"/>返回数据中心</button><span>特征快照详情</span></div>
     <div v-if="loading" class="panel empty">正在读取特征快照…</div>
     <div v-else-if="loadError" class="panel error-box">{{loadError}}</div>
@@ -60,7 +64,7 @@ onMounted(async()=>{
       <article class="model-hero">
         <div class="feature-icon purple-bg"><Sparkles :size="24"/></div>
         <div><span class="eyebrow dark">FEATURE SNAPSHOT</span><h2>{{item.name}}</h2><p>{{item.row_count??'—'}} 行 · {{features.length}} 个特征</p></div>
-        <div class="snapshot-actions"><button class="primary" :disabled="item.status!=='ready'||!item.artifact_uri||downloading" @click="downloadSnapshot"><Download :size="15"/>{{downloading?'正在下载…':'下载 Parquet'}}</button><i class="status" :class="item.status">{{item.status}}</i></div>
+        <div class="snapshot-actions"><button class="primary" :disabled="item.status!=='ready'||!item.artifact_uri||downloading" @click="downloadSnapshot"><Download :size="15"/>{{downloading?'正在下载…':'下载 Parquet'}}</button><StatusBadge :status="item.status"/></div>
       </article>
       <p v-if="downloadError" class="error-box snapshot-download-error">{{downloadError}}</p>
 
