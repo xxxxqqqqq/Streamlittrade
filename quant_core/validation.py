@@ -108,6 +108,15 @@ class SigmoidCalibratedEstimator(ClassifierMixin, BaseEstimator):
         raise RuntimeError("Use fit_time_ordered_sigmoid to preserve the calibration boundary")
 
 
+def _fit_estimator(estimator, features, labels, weight=None):
+    """Fit with optional sample weights, including Pipeline-wrapped estimators."""
+    if weight is None:
+        return estimator.fit(features, labels)
+    if hasattr(estimator, "steps"):
+        return estimator.fit(features, labels, **{f"{estimator.steps[-1][0]}__sample_weight": weight})
+    return estimator.fit(features, labels, sample_weight=weight)
+
+
 def fit_time_ordered_sigmoid(
     estimator_factory: Callable[[], object],
     features,
@@ -116,6 +125,7 @@ def fit_time_ordered_sigmoid(
     *,
     calibration_fraction: float = .2,
     purge_days: int = 5,
+    sample_weight=None,
 ) -> SigmoidCalibratedEstimator:
     """Learn a sigmoid on a later calibration slice, then refit the base on all input dates."""
     normalized = pd.to_datetime(pd.Series(dates)).dt.normalize()
@@ -130,12 +140,16 @@ def fit_time_ordered_sigmoid(
     calibration_labels = np.asarray(labels)[calibration_mask]
     if np.unique(calibration_labels).size < 2:
         raise ValueError("Probability calibration slice must contain both classes")
+    weights = None if sample_weight is None else np.asarray(sample_weight, dtype=float)
     calibration_base = estimator_factory()
-    calibration_base.fit(features.iloc[fit_mask], np.asarray(labels)[fit_mask])
+    _fit_estimator(
+        calibration_base, features.iloc[fit_mask], np.asarray(labels)[fit_mask],
+        None if weights is None else weights[fit_mask],
+    )
     raw = np.clip(calibration_base.predict_proba(features.iloc[calibration_mask])[:, 1], 1e-6, 1 - 1e-6)
     log_odds = np.log(raw / (1 - raw)).reshape(-1, 1)
     calibrator = LogisticRegression(random_state=42, C=1.0, max_iter=500)
     calibrator.fit(log_odds, calibration_labels)
     final_base = estimator_factory()
-    final_base.fit(features, labels)
+    _fit_estimator(final_base, features, labels, weights)
     return SigmoidCalibratedEstimator(final_base, calibrator)

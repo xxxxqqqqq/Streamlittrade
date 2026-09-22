@@ -60,7 +60,7 @@ def sync_data(job_id:str):
             elif source.provider=="akshare":
                 frames[symbol]=fetch_akshare_stock_data(
                     symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"),
-                    adjust=str(source.configuration.get("adjust","qfq")),
+                    adjust=str(source.configuration.get("adjust","hfq")),
                 )
             else:
                 frames[symbol]=fetch_stock_data(symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"))
@@ -232,7 +232,11 @@ def research_factors(job_id:str):
         feature_frame["date"]=pd.to_datetime(feature_frame["date"])
         horizon=int(run.parameters["forward_period"])
         market_frame=market_frame.sort_values(["symbol","date"])
-        market_frame["forward_return"]=market_frame.groupby("symbol")["close"].shift(-horizon)/market_frame["close"]-1
+        if "open" in market_frame.columns and market_frame["open"].notna().any():
+            open_group=market_frame.groupby("symbol")["open"]
+            market_frame["forward_return"]=open_group.shift(-(1+horizon))/open_group.shift(-1)-1
+        else:
+            market_frame["forward_return"]=market_frame.groupby("symbol")["close"].shift(-horizon)/market_frame["close"]-1
         frame=feature_frame.merge(
             market_frame[["date","symbol","forward_return"]],on=["date","symbol"],how="inner"
         )
@@ -241,6 +245,10 @@ def research_factors(job_id:str):
         full_date_min=str(frame["date"].min().date())
         full_date_max=str(frame["date"].max().date())
         frame=frame[frame["date"].isin(research_dates)].copy()
+        # 逐日截面去极值（1%/99% winsorize）：重尾因子不再污染 Pearson IC 与分位分析
+        frame[feature_slugs]=frame.groupby("date")[feature_slugs].transform(
+            lambda series: series.clip(series.quantile(.01), series.quantile(.99))
+        )
         _progress(jid,35)
         results={}
         min_coverage=float(run.parameters["min_coverage"])
@@ -318,6 +326,8 @@ def research_factors(job_id:str):
         metrics={
             "evaluation_scope":"factor_training_only",
             "forward_period":horizon,
+            "forward_return_mode":"executable_open_to_open_v1",
+            "preprocessing":"per_date_winsorize_1pct_v1",
             "quantiles":int(run.parameters["quantiles"]),
             "sample_rows":int(len(frame)),
             "date_min":str(frame["date"].min().date()),

@@ -26,7 +26,7 @@ DataSource
   → Raw DataVersion
   → Standardized DataVersion（质量门禁）
   → FeatureSnapshot（特征定义版本 + 数据哈希）
-  → Dataset（同源行情生成未来收益标签）
+  → Dataset（同源行情生成可执行口径的截面相对收益标签）
   → Experiment（Purged Walk-Forward）
   → ModelVersion + OOS Predictions
   → 绑定同一 DataVersion 的可信回测
@@ -95,8 +95,14 @@ ModelVersion + Baseline FeatureSnapshot + Current FeatureSnapshot
 Vue 工作台已经从流程演示扩展为可管理的多用户研究产品：
 
 - 侧栏默认只展示数据、特征、训练、模型、预测、策略、回测和任务等核心研究入口；
+- 侧栏按研究对象分区（数据与因子 / 数据集与实验 / 模型 / 回测与模拟 / 任务），
+  不再给用户编号步骤；当前路由所在分区自动展开，其余默认折叠；
+- 首页是状态驱动的工作台：按“有无数据版本、快照、数据集、模型、回测”给出唯一的
+  下一步建议，并汇总最近产物、任务状态与数据新鲜度；
 - 项目成员、用户、审计与生产监控统一收进默认折叠的“平台治理”分组，通知与搜索保留在顶部快捷入口；
-- 模型回滚、任务取消和重试保持为资源详情中的上下文操作，不再占用一级导航。
+- 模型回滚、任务取消和重试保持为资源详情中的上下文操作，不再占用一级导航；
+- 模型交易工作台从一级导航下沉为 `/models/:id/trade-workbench` 的模型下钻页，
+  旧的 `/trade-workbench` 链接重定向到模型仓库。
 
 - 管理员可以创建用户、调整全局角色、启用或停用账号；
 - 项目管理支持创建项目、列出成员、添加成员、调整项目角色和移除成员；
@@ -177,8 +183,10 @@ POST /api/v1/pipelines/quick-research（一次提交，全部参数有推荐默�
 - 链式推进只发生在 API 进程的 outbox 循环（`advance_pipelines`，行锁抢占，
   多副本安全），Worker 不感知流水线存在。
 - 任一步失败或取消，流水线按步骤名标记失败原因并停止，已成功产物保留。
-- 前端 `/quick-research` 提供单页表单、五步进度和历史流水线列表；
-  原有的分步页面全部保留。
+- 前端已下线 `/quick-research` 入口和对应页面路由（`QuickResearch.vue` 文件保留，
+  不再挂载）：侧栏改为按研究对象分区的导航，首页改成状态驱动的工作台，由它给出
+  唯一的下一步建议。流水线 API 与编排逻辑不变，仍可用分步页面或直接调用
+  `POST /api/v1/pipelines/quick-research`；原有的分步页面全部保留。
 
 ## 当前第一阶段的启动方式
 

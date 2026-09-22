@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import joblib
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as parquet
 import sklearn
@@ -23,7 +24,7 @@ from backend.app.models.job import Job
 from backend.app.models.data_catalog import DataVersion, FactorResearchRun, FeatureSnapshot
 from backend.app.models.research import Dataset, Experiment, ModelVersion, PredictionRun, SealedEvaluation
 from quant_core import fetch_stock_data, generate_demo_stock_data
-from quant_core.ml import FEATURES, build_training_frame, cross_sectional_rank_features, economic_metrics, three_way_research_split
+from quant_core.ml import FEATURES, attach_research_labels, build_training_frame, cross_sectional_rank_features, economic_metrics, three_way_research_split
 from quant_core.validation import fit_time_ordered_sigmoid, probability_diagnostics
 from backend.app.services.research_gates import factor_gate_snapshot, validate_factor_dataset_gate
 from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
@@ -33,9 +34,13 @@ from backend.app.workers.local_artifacts import cached_artifact
 def _build_estimator(algorithm: str, parameters: dict):
     """Construct one of the reviewed, deterministic platform estimators."""
     if algorithm == "hist_gradient_boosting":
-        return HistGradientBoostingClassifier(random_state=42, **parameters)
+        return HistGradientBoostingClassifier(
+            random_state=42, **{"class_weight": "balanced", **parameters}
+        )
     if algorithm == "random_forest":
-        return RandomForestClassifier(random_state=42, n_jobs=-1, **parameters)
+        return RandomForestClassifier(
+            random_state=42, n_jobs=-1, **{"class_weight": "balanced", **parameters}
+        )
     if algorithm == "extra_trees":
         return ExtraTreesClassifier(
             random_state=42, n_jobs=-1, class_weight="balanced", **parameters
@@ -43,9 +48,16 @@ def _build_estimator(algorithm: str, parameters: dict):
     if algorithm == "logistic_regression":
         return make_pipeline(
             StandardScaler(),
-            LogisticRegression(random_state=42, **parameters),
+            LogisticRegression(random_state=42, **{"class_weight": "balanced", **parameters}),
         )
     raise ValueError(f"Unsupported training algorithm: {algorithm}")
+
+
+def _date_equal_weights(dates) -> np.ndarray:
+    """每个交易日等权的样本权重（均值归一为 1），防止成分股多的日期主导训练。"""
+    counts = pd.Series(dates).value_counts()
+    weight = pd.Series(dates).map(counts).rdiv(1.0)
+    return (weight / weight.mean()).to_numpy()
 
 
 def _prepare_model_features(
@@ -115,6 +127,10 @@ def build_dataset(job_id: str) -> dict:
                     data = fetch_stock_data(symbol, spec["start_date"].replace("-", ""), spec["end_date"].replace("-", ""))
                 frames.append(build_training_frame(data, symbol, spec["horizon"]))
             result = pd.concat(frames, ignore_index=True).sort_values(["date", "symbol"])
+            if result["symbol"].nunique() > 1:
+                median = result.groupby("date")["future_return"].transform("median")
+                result["label"] = (result["future_return"] > median).where(result["future_return"].notna())
+                result["label"] = result["label"].astype(int)
             feature_columns = FEATURES
             source_metadata = {"mode": "legacy_fetch", "data_source": spec["data_source"]}
         _check_cancel(jid, 70)
@@ -139,7 +155,8 @@ def build_dataset(job_id: str) -> dict:
             "schema_version": 2,
             "content_sha256": content_hash,
             "features": feature_columns,
-            "label": "future_return > 0",
+            "label": "future_return > 当日截面中位数（多标的）或 > 0（单标的）",
+            "label_mode": "executable_open_to_open_cross_sectional_v1",
             "horizon": spec["horizon"],
             "symbols": spec["symbols"],
             "date_min": str(pd.to_datetime(result.date).min().date()),
@@ -259,7 +276,11 @@ def _merge_snapshot_features_and_labels(
     features = pd.read_parquet(feature_path, columns=feature_fields)
     if progress:
         progress(34)
-    market = pd.read_parquet(market_path, columns=["date", "symbol", "close"])
+    try:
+        market = pd.read_parquet(market_path, columns=["date", "symbol", "open", "close"])
+    except Exception:
+        # 早期数据版本可能没有 open 列；attach_research_labels 会回退 close 口径
+        market = pd.read_parquet(market_path, columns=["date", "symbol", "close"])
     if progress:
         progress(42)
     for frame in (features, market):
@@ -270,9 +291,7 @@ def _merge_snapshot_features_and_labels(
     features = features[["date", "symbol", *feature_columns]].copy()
     if progress:
         progress(48)
-    market = market.sort_values(["symbol", "date"])
-    market["future_return"] = market.groupby("symbol")["close"].shift(-horizon) / market["close"] - 1
-    market["label"] = (market["future_return"] > 0).where(market["future_return"].notna())
+    market = attach_research_labels(market, horizon)
     if progress:
         progress(55)
     labels = market[["date", "symbol", "future_return", "label"]]
@@ -327,6 +346,7 @@ def train_experiment(job_id: str) -> dict:
             model = fit_time_ordered_sigmoid(
                 lambda: _build_estimator(algorithm, params),
                 train_features, train["label"], train["date"], purge_days=horizon,
+                sample_weight=_date_equal_weights(train["date"]),
             )
             pred, prob = model.predict(test_features), model.predict_proba(test_features)[:, 1]
             raw_prob = model.raw_predict_proba(test_features)[:, 1]
@@ -389,6 +409,7 @@ def train_experiment(job_id: str) -> dict:
         final_model = fit_time_ordered_sigmoid(
             lambda: _build_estimator(algorithm, params),
             development_features, development["label"], development["date"], purge_days=horizon,
+            sample_weight=_date_equal_weights(development["date"]),
         )
         reproducibility = {
             "schema_version": 1, "random_seed": 42, "dataset": dataset_snapshot,
@@ -397,6 +418,8 @@ def train_experiment(job_id: str) -> dict:
             "trained_at": datetime.now(UTC).isoformat(),
             "fit_scope": "training_plus_tuning_only",
             "feature_preprocessing": "daily_cross_sectional_percentile_rank_v1",
+            "label_mode": "executable_open_to_open_cross_sectional_v1",
+            "sample_weighting": "date_equal_v1",
             "fit_end": split.tuning_end,
             "sealed_start": split.sealed_start,
         }

@@ -346,6 +346,10 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
 
     _ensure_numeric_libraries()
     parameters = validate_factor_parameters(implementation, parameters)
+    if "date" in group.columns:
+        # 滚动窗口的正确性依赖组内按日期升序；调用方未排序时必须兜底，
+        # 否则窗口会静默错位甚至把未来数据卷入当前因子。
+        group = group.sort_values("date")
     close = group["close"].astype(float)
     window = int(parameters.get("window", 20))
     returns = close.pct_change()

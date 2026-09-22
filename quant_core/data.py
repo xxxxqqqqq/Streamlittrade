@@ -75,7 +75,7 @@ def fetch_stock_data(
                 start_date=start,
                 end_date=end,
                 frequency="d",
-                adjustflag="2",
+                adjustflag="1",
             )
             if result.error_code != "0":
                 raise MarketDataError(f"行情查询失败: {result.error_msg}")

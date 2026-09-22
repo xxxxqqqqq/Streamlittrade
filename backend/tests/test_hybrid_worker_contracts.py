@@ -200,8 +200,12 @@ class PartitionedMaterializationTests(unittest.TestCase):
             self.assertEqual(reader.call_args_list[0].kwargs["columns"], [
                 "date", "symbol", "factor_a", "universe_member",
             ])
+            # 行情优先按可执行口径请求 open 列；旧数据版本缺 open 时回退 close
             self.assertEqual(
-                reader.call_args_list[1].kwargs["columns"], ["date", "symbol", "close"]
+                reader.call_args_list[1].kwargs["columns"], ["date", "symbol", "open", "close"]
+            )
+            self.assertEqual(
+                reader.call_args_list[2].kwargs["columns"], ["date", "symbol", "close"]
             )
             self.assertEqual(progress, [34, 42, 48, 55, 62, 68])
 

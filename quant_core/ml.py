@@ -20,6 +20,40 @@ def cross_sectional_rank_features(frame: pd.DataFrame, feature_columns: list[str
     return ranked.mul(2.0).sub(1.0).astype("float32")
 
 
+def executable_forward_return(frame: pd.DataFrame, horizon: int) -> pd.Series:
+    """次日开盘买入、H 日后开盘卖出的可执行收益（单标的、按时间升序）。
+
+    信号在 T 日收盘产生、T+1 日开盘才能成交（T+1 交易制度），因此标签必须
+    从 open[t+1] 起算；用 close[t]→close[t+H] 会把拿不到的隔夜跳空算进训练
+    目标，造成样本内指标虚高。无 open 列时回退 close 口径并视为近似。
+    """
+    if "open" in frame.columns and frame["open"].notna().any():
+        open_price = frame["open"].astype(float)
+        return open_price.shift(-(1 + horizon)) / open_price.shift(-1) - 1
+    close = frame["close"].astype(float)
+    return close.shift(-horizon) / close - 1
+
+
+def attach_research_labels(frame: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """为多标的面板附加可执行收益与截面相对标签。
+
+    label = future_return > 当日截面中位数。绝对涨跌标签的截面方差被大盘
+    beta 主导，会让模型学习择时而非选股；下游是截面 Top-N 组合，训练目标
+    必须是同一日内的相对强弱。返回带 future_return 与 label 列的新 frame。
+    """
+    frame = frame.sort_values(["symbol", "date"]).copy()
+    grouped = frame.groupby("symbol")
+    if "open" in frame.columns and frame["open"].notna().any():
+        open_price = grouped["open"]
+        frame["future_return"] = open_price.shift(-(1 + horizon)) / open_price.shift(-1) - 1
+    else:
+        close = grouped["close"]
+        frame["future_return"] = close.shift(-horizon) / frame["close"] - 1
+    median = frame.groupby("date")["future_return"].transform("median")
+    frame["label"] = (frame["future_return"] > median).where(frame["future_return"].notna())
+    return frame
+
+
 @dataclass(frozen=True)
 class TimeFold:
     """One expanding-window fold separated by purge and embargo date gaps."""
@@ -223,7 +257,9 @@ def build_training_frame(data: pd.DataFrame, symbol: str, horizon: int = 5) -> p
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     frame["rsi_14"] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
-    future_return = close.shift(-horizon) / close - 1
+    # 单标的 frame 没有截面，标签只能是绝对口径；多标的拼接后应由调用方
+    # 用 attach_research_labels 重算截面相对标签。
+    future_return = executable_forward_return(frame, horizon)
     frame["future_return"] = future_return
     frame["label"] = (future_return > 0).where(future_return.notna())
     frame["symbol"] = symbol
