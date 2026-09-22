@@ -97,7 +97,10 @@ onMounted(async()=>{
     models.value=modelResponse.data.filter((item:any)=>Boolean(item.prediction_artifact_uri))
     if(versions.value.length){form.value.data_version_id=versions.value[0].id;applyDataVersion()}
     else{form.value.data_source='demo';form.value.symbol='DEMO';form.value.symbols='DEMO1,DEMO2,DEMO3,DEMO4,DEMO5'}
-    if(strategies.value.length)form.value.strategy_id=strategies.value[0].id
+    if(strategies.value.length){
+      const requestedStrategy=String(route.query.strategy_id||'')
+      form.value.strategy_id=strategies.value.some((item:any)=>item.id===requestedStrategy)?requestedStrategy:strategies.value[0].id
+    }
     if(models.value.length){
       const requested=String(route.query.model_id||'')
       form.value.model_id=models.value.some((item:any)=>item.id===requested)?requested:models.value[0].id

@@ -4,25 +4,42 @@ test.beforeEach(async({page})=>{
   await page.goto('/login')
   await page.getByLabel('邮箱').fill('admin@quant.local')
   await page.getByLabel('密码').fill('quant-dev-admin')
-  await page.getByRole('button',{name:'安全登录'}).click()
+  // 登录页已经简化成单一「登录」按钮，断言要与 Login.vue 保持一致。
+  await page.getByRole('button',{name:'登录',exact:true}).click()
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByText('QuantForge')).toBeVisible()
+  await expect(page.getByText('QuantForge',{exact:true})).toBeVisible()
 })
 
-test('core research workflow is prominent and secondary analysis is isolated',async({page})=>{
+test('sidebar groups research objects instead of numbered steps',async({page})=>{
   const sidebar=page.locator('aside')
-  await expect(sidebar.getByRole('link',{name:/^1\s+数据与标的$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^2\s+因子工程$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^3\s+研究数据集$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^4\s+模型研究$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^5\s+模型交易工作台$/})).toBeVisible()
-  await expect(sidebar.getByRole('link',{name:/^6\s+组合回测$/})).toBeVisible()
-  await expect(page.locator('.core-flow .flow-card')).toHaveCount(6)
-  await expect(page.getByText('从研究数据到可交易组合，沿五个阶段推进')).toBeVisible()
+  // 侧栏不再把流程编成 1/2/3 号步骤，而是按研究对象分区。
+  await expect(sidebar.getByRole('link',{name:'研究首页',exact:true})).toBeVisible()
+  for(const label of ['数据与因子','数据集与实验','模型','回测与模拟','任务','平台治理']){
+    await expect(sidebar.getByRole('button',{name:label,exact:true})).toBeVisible()
+  }
+  await expect(sidebar.getByRole('link',{name:/^一键研究$/})).toHaveCount(0)
+  await expect(sidebar.getByRole('link',{name:/^[1-6]\s/})).toHaveCount(0)
 
-  await expect(page.getByRole('link',{name:'模型比较',exact:true})).not.toBeVisible()
-  await page.getByRole('button',{name:'研究资产与分析'}).click()
-  await expect(page.getByRole('link',{name:'模型比较',exact:true})).toBeVisible()
+  await sidebar.getByRole('button',{name:'数据与因子',exact:true}).click()
+  await expect(sidebar.getByRole('link',{name:'数据与标的',exact:true})).toBeVisible()
+  await expect(sidebar.getByRole('link',{name:'因子工程',exact:true})).toBeVisible()
+
+  await sidebar.getByRole('button',{name:'模型',exact:true}).click()
+  await expect(sidebar.getByRole('link',{name:'模型仓库',exact:true})).toBeVisible()
+  await expect(sidebar.getByRole('link',{name:'模型比较',exact:true})).toBeVisible()
+
+  await sidebar.getByRole('button',{name:'回测与模拟',exact:true}).click()
+  await expect(sidebar.getByRole('link',{name:'回测中心',exact:true})).toBeVisible()
+  await expect(sidebar.getByRole('link',{name:'模拟交易',exact:true})).toBeVisible()
+})
+
+test('dashboard shows the recommended next step and recent products',async({page})=>{
+  await expect(page.locator('.next-step')).toBeVisible()
+  await expect(page.getByText('下一步',{exact:true})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'最近产物'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'数据新鲜度'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'任务状态'})).toBeVisible()
+  await expect(page.locator('.core-flow .flow-card')).toHaveCount(0)
 })
 
 test('global search and notification controls are functional',async({page})=>{
@@ -47,7 +64,8 @@ test('admin product pages and data details are reachable',async({page})=>{
   await expect(page.getByRole('heading',{name:'用户管理',level:2})).toBeVisible()
   await expect(page.getByText('admin@quant.local')).toBeVisible()
 
-  await page.getByRole('link',{name:/1\s+数据与标的/}).click()
+  await page.getByRole('button',{name:'数据与因子',exact:true}).click()
+  await page.getByRole('link',{name:'数据与标的',exact:true}).click()
   await expect(page.getByText('数据版本与质量')).toBeVisible()
   await page.locator('.product-link-row').first().click()
   await expect(page.getByRole('heading',{name:'数据质量详情'})).toBeVisible()

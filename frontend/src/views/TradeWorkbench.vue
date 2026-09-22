@@ -39,7 +39,7 @@ async function loadTimeline(){
   }catch(exception:any){error.value=errorMessage(exception);timeline.value=null}
   finally{loading.value=false}
 }
-async function changeModel(){await router.replace({path:'/trade-workbench',query:{model_id:modelId.value}});await loadContext()}
+async function changeModel(){await router.replace({path:`/models/${modelId.value}/trade-workbench`});await loadContext()}
 async function changeBacktest(){
   context.value=(await api.get(`/models/${modelId.value}/trade-workbench/context`,{params:{backtest_id:backtestId.value}})).data
   await loadTimeline()

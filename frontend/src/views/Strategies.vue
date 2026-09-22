@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import {computed,onMounted,ref} from 'vue'
+import {useRouter} from 'vue-router'
 import {api} from '../api'
-import {Plus,RefreshCw,ScrollText} from 'lucide-vue-next'
+import {FlaskConical,Plus,RefreshCw,ScrollText} from 'lucide-vue-next'
 
+const router=useRouter()
 const rows=ref<any[]>([])
 const loading=ref(false)
 const saving=ref(false)
@@ -16,6 +18,15 @@ const form=ref({
   lookback:10,drop_threshold:0.08,rebound_threshold:0.03,confirm_days:2,
 })
 const isTrend=computed(()=>form.value.implementation==='right_trend')
+const parameterLabels:Record<string,string>={
+  ma_short:'短期均线',ma_mid:'中期均线',ma_long:'长期均线',vol_ratio:'量比',
+  lookback:'回看周期',drop_threshold:'下跌阈值',rebound_threshold:'反弹阈值',confirm_days:'确认天数',
+}
+// 参数以键值对展示，不再直接把 JSON 字符串丢给用户。
+function parameterEntries(row:any){
+  return Object.entries(row.parameters||{}).map(([key,value])=>[parameterLabels[key]||key,value] as [string,unknown])
+}
+function backtest(row:any){router.push({path:'/backtests/new',query:{strategy_id:row.id}})}
 
 async function load(){
   loading.value=true
@@ -82,12 +93,18 @@ onMounted(load)
     </div>
     <article class="panel">
       <div class="data-table">
-        <div class="data-row header"><span>名称</span><span>标识 / 版本</span><span>实现</span><span>参数</span></div>
-        <div v-for="row in rows" :key="row.id" class="data-row">
-          <span>{{row.name}}</span><span>{{row.slug}} v{{row.version}}</span><span>{{row.implementation}}</span><span>{{JSON.stringify(row.parameters)}}</span>
+        <div class="data-row header with-action"><span>名称</span><span>标识 / 版本</span><span>实现</span><span>参数</span><span>操作</span></div>
+        <div v-for="row in rows" :key="row.id" class="data-row with-action">
+          <span>{{row.name}}</span><span>{{row.slug}} v{{row.version}}</span><span>{{row.implementation}}</span>
+          <span class="parameter-cell"><span v-for="[label,value] in parameterEntries(row)" :key="label">{{label}} {{value}}</span><span v-if="!parameterEntries(row).length">无参数</span></span>
+          <span><button class="text-button" @click="backtest(row)"><FlaskConical :size="13"/>用此版本回测</button></span>
         </div>
         <div v-if="!rows.length&&!loading" class="empty">尚未登记策略版本。</div>
       </div>
     </article>
   </section>
 </template>
+
+<style scoped>
+.parameter-cell{display:flex;flex-wrap:wrap;gap:5px}.parameter-cell span{padding:3px 7px;border-radius:7px;background:#f1f5fa;color:#546277;font-size:10px}.data-row .text-button{white-space:nowrap}
+</style>

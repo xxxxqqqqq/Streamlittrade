@@ -3,7 +3,6 @@ import App from './App.vue'
 import { router } from './router'
 import './style.css'
 import './workspace-switcher.css'
-import './flow-connectors.css'
 import './workflow.css'
 import './background-tasks.css'
 import './report.css'
@@ -14,7 +13,6 @@ import './paper.css'
 import './monitoring.css'
 import './product.css'
 import './trade-workbench.css'
-import './core-flow-v2.css'
 
 const app=createApp(App)
 app.use(router)

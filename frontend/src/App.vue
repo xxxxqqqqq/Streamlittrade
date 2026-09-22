@@ -6,9 +6,9 @@ import {authenticated,clearSession,refreshToken,user} from './auth'
 import {clearProject,selectProject,selectedProjectId} from './projects'
 import ToastCenter from './components/ToastCenter.vue'
 import {
-  Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,ChartCandlestick,
+  Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,
   Check,ChevronDown,FolderKanban,LayoutDashboard,Layers3,LogOut,Plus,Search,ScrollText,
-  Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,Zap,
+  Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,
 } from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
@@ -16,7 +16,7 @@ const title=computed(()=>String(route.meta.title||'量化平台'))
 const publicPage=computed(()=>Boolean(route.meta.public))
 const projects=ref<any[]>([]),notifications=ref<any[]>([])
 const searchOpen=ref(false),notificationOpen=ref(false),searchQuery=ref(''),searchResults=ref<any[]>([]),searching=ref(false)
-const analysisOpen=ref(false),productionOpen=ref(false),governanceOpen=ref(false),projectMenuOpen=ref(false)
+const projectMenuOpen=ref(false)
 let notificationTimer:number|undefined
 
 watch([publicPage,authenticated],async([isPublic,isAuthenticated])=>{
@@ -49,35 +49,42 @@ async function search(){
 function openResult(item:any){searchOpen.value=false;searchQuery.value='';searchResults.value=[];router.push(item.url)}
 function openNotifications(){notificationOpen.value=!notificationOpen.value;if(notificationOpen.value)loadNotifications()}
 
-// 侧栏只将真实研究顺序作为一级入口。数据集、模型版本和预测等属于
-// 研究产物或扩展分析，保留能力但默认折叠，避免用户误把它们当成必做步骤。
-const coreNav=[
-  ['/quick-research','一键研究',Zap],
-  ['/','研究首页',LayoutDashboard],['/data-center','1  数据与标的',Layers3],
-  ['/factor-research','2  因子工程',Filter],['/datasets','3  研究数据集',Database],
-  ['/experiments','4  模型研究',BrainCircuit],['/trade-workbench','5  模型交易工作台',ChartCandlestick],
-  ['/backtests','6  组合回测',FlaskConical],
-] as const
-const analysisNav=[
-  ['/models','模型仓库',Boxes],['/models/compare','模型比较',ChartNoAxesCombined],
-  ['/strategies','规则策略版本',ScrollText],
-] as const
-const productionNav=[
-  ['/predictions','批量预测',Sparkles],['/paper','模拟交易',WalletCards],
-  ['/jobs','计算任务',Activity],
-] as const
-const governanceNav=[
+// 侧栏按研究对象分区，不再把研究流程编成 1/2/3 号步骤：用户看到的是
+// “数据、实验、模型、回测、任务”，而不是一个必须顺序执行的清单。
+// 分区默认折叠，当前路由所在分区自动展开，避免用户丢失位置。
+type NavLink=readonly [string,string,any]
+type NavSection={key:string,label:string,icon:any,links:readonly NavLink[]}
+
+const homeLink:NavLink=['/','研究首页',LayoutDashboard]
+const sections:readonly NavSection[]=[
+  {key:'data',label:'数据与因子',icon:Layers3,links:[
+    ['/data-center','数据与标的',Layers3],['/factor-research','因子工程',Filter],
+  ]},
+  {key:'research',label:'数据集与实验',icon:Database,links:[
+    ['/datasets','研究数据集',Database],['/experiments','训练实验',BrainCircuit],
+  ]},
+  {key:'models',label:'模型',icon:Boxes,links:[
+    ['/models','模型仓库',Boxes],['/models/compare','模型比较',ChartNoAxesCombined],
+    ['/predictions','批量预测',Sparkles],
+  ]},
+  {key:'backtest',label:'回测与模拟',icon:FlaskConical,links:[
+    ['/backtests','回测中心',FlaskConical],['/strategies','策略版本',ScrollText],
+    ['/paper','模拟交易',WalletCards],
+  ]},
+  {key:'tasks',label:'任务',icon:Activity,links:[['/jobs','计算任务',Activity]]},
+]
+const governanceNav:readonly NavLink[]=[
   ['/projects','项目与成员',FolderKanban],['/admin/users','用户管理',Users],
   ['/admin/audit','审计日志',ShieldCheck],['/monitoring','生产运行',ChartNoAxesCombined],
-] as const
+]
 const availableGovernanceNav=computed(()=>user.value?.role==='admin'?governanceNav:[])
-const routeIn=(items:readonly (readonly [string,string,any])[])=>items.some(([to])=>route.path===to||route.path.startsWith(`${to}/`))
-const analysisRouteActive=computed(()=>routeIn(analysisNav))
-const productionRouteActive=computed(()=>routeIn(productionNav))
-const governanceRouteActive=computed(()=>governanceNav.some(([to])=>route.path===to||route.path.startsWith(`${to}/`)))
-watch(analysisRouteActive,active=>{if(active)analysisOpen.value=true},{immediate:true})
-watch(productionRouteActive,active=>{if(active)productionOpen.value=true},{immediate:true})
-watch(governanceRouteActive,active=>{if(active)governanceOpen.value=true},{immediate:true})
+const openGroups=ref<Record<string,boolean>>({})
+const routeIn=(items:readonly NavLink[])=>items.some(([to])=>route.path===to||route.path.startsWith(`${to}/`))
+const governanceRouteActive=computed(()=>routeIn(governanceNav))
+const activeSectionKey=computed(()=>sections.find(section=>routeIn(section.links))?.key||'')
+function toggleGroup(key:string){openGroups.value={...openGroups.value,[key]:!openGroups.value[key]}}
+watch(activeSectionKey,key=>{if(key)openGroups.value={...openGroups.value,[key]:true}},{immediate:true})
+watch(governanceRouteActive,active=>{if(active)openGroups.value={...openGroups.value,governance:true}},{immediate:true})
 
 onMounted(()=>{notificationTimer=window.setInterval(loadNotifications,30000);document.addEventListener('click',closeProjectMenu)})
 onUnmounted(()=>{window.clearInterval(notificationTimer);document.removeEventListener('click',closeProjectMenu)})
@@ -96,29 +103,21 @@ onUnmounted(()=>{window.clearInterval(notificationTimer);document.removeEventLis
         </div>
       </div>
       <nav>
-        <p class="nav-section-label">核心流程</p>
-        <RouterLink v-for="[to,label,icon] in coreNav" :key="to" :to="to"><component :is="icon" :size="18"/><span>{{label}}</span></RouterLink>
-        <div class="nav-group">
-          <button class="nav-group-toggle" :class="{active:analysisRouteActive}" :aria-expanded="analysisOpen" @click="analysisOpen=!analysisOpen">
-            <ChartNoAxesCombined :size="18"/><span>研究资产与分析</span><ChevronDown :size="15" class="nav-chevron" :class="{open:analysisOpen}"/>
+        <p class="nav-section-label">研究空间</p>
+        <RouterLink :to="homeLink[0]"><component :is="homeLink[2]" :size="18"/><span>{{homeLink[1]}}</span></RouterLink>
+        <div v-for="section in sections" :key="section.key" class="nav-group">
+          <button class="nav-group-toggle" :class="{active:routeIn(section.links)}" :aria-expanded="Boolean(openGroups[section.key])" @click="toggleGroup(section.key)">
+            <component :is="section.icon" :size="18"/><span>{{section.label}}</span><ChevronDown :size="15" class="nav-chevron" :class="{open:openGroups[section.key]}"/>
           </button>
-          <div v-if="analysisOpen" class="nav-group-links">
-            <RouterLink v-for="[to,label,icon] in analysisNav" :key="to" :to="to"><component :is="icon" :size="16"/><span>{{label}}</span></RouterLink>
-          </div>
-        </div>
-        <div class="nav-group">
-          <button class="nav-group-toggle" :class="{active:productionRouteActive}" :aria-expanded="productionOpen" @click="productionOpen=!productionOpen">
-            <Activity :size="18"/><span>生产应用</span><ChevronDown :size="15" class="nav-chevron" :class="{open:productionOpen}"/>
-          </button>
-          <div v-if="productionOpen" class="nav-group-links">
-            <RouterLink v-for="[to,label,icon] in productionNav" :key="to" :to="to"><component :is="icon" :size="16"/><span>{{label}}</span></RouterLink>
+          <div v-if="openGroups[section.key]" class="nav-group-links">
+            <RouterLink v-for="[to,label,icon] in section.links" :key="to" :to="to"><component :is="icon" :size="16"/><span>{{label}}</span></RouterLink>
           </div>
         </div>
         <div v-if="availableGovernanceNav.length" class="governance-nav">
-          <button class="nav-group-toggle" :class="{active:governanceRouteActive}" :aria-expanded="governanceOpen" @click="governanceOpen=!governanceOpen">
-            <Settings2 :size="18"/><span>平台治理</span><ChevronDown :size="15" class="nav-chevron" :class="{open:governanceOpen}"/>
+          <button class="nav-group-toggle" :class="{active:governanceRouteActive}" :aria-expanded="Boolean(openGroups.governance)" @click="toggleGroup('governance')">
+            <Settings2 :size="18"/><span>平台治理</span><ChevronDown :size="15" class="nav-chevron" :class="{open:openGroups.governance}"/>
           </button>
-          <div v-if="governanceOpen" class="nav-group-links">
+          <div v-if="openGroups.governance" class="nav-group-links">
             <RouterLink v-for="[to,label,icon] in availableGovernanceNav" :key="to" :to="to"><component :is="icon" :size="16"/><span>{{label}}</span></RouterLink>
           </div>
         </div>

@@ -24,7 +24,7 @@ onMounted(load)
 <template>
   <section>
     <div class="page-intro">
-      <div><h2>模型研究</h2><p>从不可变训练样本开始，完成训练验证，再审阅候选模型</p></div>
+      <div><h2>训练实验</h2><p>从不可变训练样本开始，完成训练验证，再审阅候选模型</p></div>
       <button class="primary" @click="router.push('/experiments/new')"><Plus :size="16"/>新建训练实验</button>
     </div>
 
