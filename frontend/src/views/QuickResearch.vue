@@ -34,12 +34,14 @@ async function refreshActive(){
 async function loadPipelines(){pipelines.value=(await api.get('/pipelines')).data}
 
 onMounted(async()=>{
-  const [versionList,snapshotList]=await Promise.all([
-    api.get('/versions'),api.get('/materializations'),
-  ])
-  versions.value=versionList.data;snapshots.value=snapshotList.data
-  if(readyVersions.value.length)form.value.data_version_id=readyVersions.value[0].id
-  if(readySnapshots.value.length)form.value.feature_snapshot_id=readySnapshots.value[0].id
+  try{
+    const [versionList,snapshotList]=await Promise.all([
+      api.get('/data-center/versions'),api.get('/data-center/materializations'),
+    ])
+    versions.value=versionList.data;snapshots.value=snapshotList.data
+    if(readyVersions.value.length)form.value.data_version_id=readyVersions.value[0].id
+    if(readySnapshots.value.length)form.value.feature_snapshot_id=readySnapshots.value[0].id
+  }catch{error.value='数据版本与快照加载失败，请刷新重试'}
   await loadPipelines()
 })
 onBeforeUnmount(stopPolling)
