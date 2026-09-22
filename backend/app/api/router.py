@@ -17,6 +17,7 @@ from backend.app.api.projects import router as projects_router
 from backend.app.api.operations import router as operations_router
 from backend.app.api.product import router as product_router
 from backend.app.api.trade_workbench import router as trade_workbench_router
+from backend.app.api.pipelines import router as pipelines_router
 
 
 api_router = APIRouter()
@@ -32,6 +33,7 @@ api_router.include_router(projects_router)
 api_router.include_router(operations_router)
 api_router.include_router(product_router)
 api_router.include_router(trade_workbench_router)
+api_router.include_router(pipelines_router)
 
 
 @api_router.get("/system/info", tags=["system"])

@@ -44,8 +44,11 @@ def recover_expired_jobs()->int:
     return recovered
 
 async def outbox_loop(stop:asyncio.Event)->None:
+    # 延迟导入避免循环依赖：pipeline 服务本身依赖本模块的 add_outbox。
+    from backend.app.services.pipeline import advance_pipelines
     while not stop.is_set():
         await asyncio.to_thread(dispatch_pending)
         await asyncio.to_thread(recover_expired_jobs)
+        await asyncio.to_thread(advance_pipelines)
         try:await asyncio.wait_for(stop.wait(),timeout=2)
         except TimeoutError:pass

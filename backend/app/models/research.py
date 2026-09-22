@@ -108,6 +108,26 @@ class SealedEvaluation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class ResearchPipeline(Base):
+    """一键研究流水线：由服务端按序编排快照→因子研究→数据集→训练→调参区回测。
+
+    每一步仍是独立的标准 Job（走 outbox 与任务队列），流水线只记录链式编排
+    状态；推进动作由 API 进程的 outbox 循环在任务落终态后执行。
+    """
+    __tablename__ = "research_pipelines"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running", index=True)
+    current_step: Mapped[str] = mapped_column(String(30), nullable=False)
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    current_job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class PredictionRun(Base):
     """A project-scoped batch prediction produced from an immutable feature snapshot."""
     __tablename__ = "prediction_runs"

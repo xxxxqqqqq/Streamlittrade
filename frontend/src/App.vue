@@ -8,7 +8,7 @@ import ToastCenter from './components/ToastCenter.vue'
 import {
   Activity,Bell,Boxes,BrainCircuit,ChartNoAxesCombined,Database,FlaskConical,ChartCandlestick,
   Check,ChevronDown,FolderKanban,LayoutDashboard,Layers3,LogOut,Plus,Search,ScrollText,
-  Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,
+  Filter,Settings2,ShieldCheck,Sparkles,Users,WalletCards,X,Zap,
 } from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter()
@@ -52,6 +52,7 @@ function openNotifications(){notificationOpen.value=!notificationOpen.value;if(n
 // 侧栏只将真实研究顺序作为一级入口。数据集、模型版本和预测等属于
 // 研究产物或扩展分析，保留能力但默认折叠，避免用户误把它们当成必做步骤。
 const coreNav=[
+  ['/quick-research','一键研究',Zap],
   ['/','研究首页',LayoutDashboard],['/data-center','1  数据与标的',Layers3],
   ['/factor-research','2  因子工程',Filter],['/datasets','3  研究数据集',Database],
   ['/experiments','4  模型研究',BrainCircuit],['/trade-workbench','5  模型交易工作台',ChartCandlestick],

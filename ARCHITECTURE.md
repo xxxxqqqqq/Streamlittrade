@@ -158,6 +158,28 @@ ModelVersion
 
 这些功能应随数据集与训练闭环逐步加入，不需要阻塞平台地基建设。
 
+## 一键研究流水线（已完成）
+
+针对"数据 → 特征 → 数据集 → 训练 → 回测"六步跨页操作过重的问题，平台新增
+服务端编排的一键研究流水线：
+
+```text
+POST /api/v1/pipelines/quick-research（一次提交，全部参数有推荐默认值）
+  → materialize_features（可跳过：直接选用已就绪特征快照）
+  → research_factors（默认 horizon=20，BH FDR 门禁不变）
+  → build_dataset（因子门禁 validate_factor_dataset_gate 不变）
+  → train_experiment
+  → 调参区 OOS 组合回测（完整不可变区间，禁止挑选日期）
+```
+
+- 每一步仍是通过 outbox 派发的标准 Job，取消、超时、Worker 恢复语义与手工
+  创建完全一致；流水线不绕过任何既有治理门禁，封存区协议不受影响。
+- 链式推进只发生在 API 进程的 outbox 循环（`advance_pipelines`，行锁抢占，
+  多副本安全），Worker 不感知流水线存在。
+- 任一步失败或取消，流水线按步骤名标记失败原因并停止，已成功产物保留。
+- 前端 `/quick-research` 提供单页表单、五步进度和历史流水线列表；
+  原有的分步页面全部保留。
+
 ## 当前第一阶段的启动方式
 
 启动平台基础设施：

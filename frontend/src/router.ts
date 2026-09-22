@@ -9,6 +9,7 @@ import ModelCompare from './views/ModelCompare.vue'
 import BacktestCreate from './views/BacktestCreate.vue'
 import BacktestDetail from './views/BacktestDetail.vue'
 import Login from './views/Login.vue'
+import QuickResearch from './views/QuickResearch.vue'
 import Jobs from './views/Jobs.vue'
 import PaperTrading from './views/PaperTrading.vue'
 import Monitoring from './views/Monitoring.vue'
@@ -29,6 +30,7 @@ export const router=createRouter({
   history:createWebHistory(),
   routes:[
     {path:'/login',component:Login,meta:{title:'登录',public:true}},
+    {path:'/quick-research',component:QuickResearch,meta:{title:'一键研究'}},
     {path:'/',component:Dashboard,meta:{title:'研究总览'}},
     {path:'/data-center',component:DataCenter,meta:{title:'数据与标的'}},
     {path:'/factor-research',component:FactorResearch,meta:{title:'因子工程'}},

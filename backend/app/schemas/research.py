@@ -190,3 +190,45 @@ class PredictionRead(BaseModel):
     summary: dict[str, Any] | None
     error_message: str | None
     created_at: datetime
+
+
+class QuickResearchCreate(BaseModel):
+    """一键研究流水线入参；除名称和数据来源外全部有推荐默认值。"""
+    name: str = Field(min_length=2, max_length=120)
+    data_version_id: UUID | None = None
+    feature_snapshot_id: UUID | None = None
+    horizon: int = Field(default=20, ge=1, le=60)
+    training_fraction: float = Field(default=0.55, ge=0.3, le=0.8)
+    algorithm: Literal["hist_gradient_boosting", "random_forest", "extra_trees", "logistic_regression"] = "hist_gradient_boosting"
+    algorithm_parameters: dict[str, int | float] = Field(default_factory=dict)
+    top_n: int = Field(default=5, ge=1, le=100)
+    minimum_probability: float = Field(default=0.55, ge=0, le=1)
+    rebalance_frequency: int = Field(default=5, ge=1, le=60)
+    initial_cash: float = Field(default=1_000_000, gt=0, le=1_000_000_000)
+    _formal_name = field_validator("name")(reject_corrupted_display_name)
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if bool(self.data_version_id) == bool(self.feature_snapshot_id):
+            raise ValueError("必须且只能选择一个标准化数据版本或一个已就绪特征快照")
+        return self
+
+
+class PipelineSubmission(BaseModel):
+    pipeline_id: UUID
+    job_id: UUID
+    status: Literal["running"] = "running"
+
+
+class PipelineRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    project_id: UUID | None
+    name: str
+    status: str
+    current_step: str
+    spec: dict[str, Any]
+    current_job_id: UUID | None
+    error_message: str | None
+    created_at: datetime
+    completed_at: datetime | None
