@@ -196,8 +196,12 @@ def economic_metrics(
     horizon: int,
     top_fraction: float = 0.2,
     round_trip_cost_bps: float = 20.0,
-) -> dict[str, float]:
-    """Calculate cross-sectional IC and a cost-aware top-score portfolio proxy."""
+) -> dict[str, float | str]:
+    """Calculate cross-sectional IC and a cost-aware top-score portfolio proxy.
+
+    返回值带 ``estimate_kind="research_proxy"``：这是横截面研究口径的代理指标，
+    不是撮合级别的可交易业绩。
+    """
     required = {"date", "symbol", "probability", "future_return"}
     missing = required.difference(predictions.columns)
     if missing:
@@ -238,6 +242,9 @@ def economic_metrics(
         "win_rate": round(float(np.mean(net > 0)), 6),
         "turnover": round(float(np.mean(turnovers)), 6),
         "round_trip_cost_bps": round(float(round_trip_cost_bps), 2),
+        # 口径标注：这些经济指标是研究代理（等权 Top 分位、固定成本假设），
+        # 不是撮合级别的可交易业绩，前端据此避免把代理值当成实盘预期。
+        "estimate_kind": "research_proxy",
     }
 
 

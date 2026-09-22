@@ -53,6 +53,130 @@ def _build_estimator(algorithm: str, parameters: dict):
     raise ValueError(f"Unsupported training algorithm: {algorithm}")
 
 
+GRID_SEARCH_KEY = "grid_search"
+HGB_GRID_LEARNING_RATES = (0.03, 0.05, 0.1)
+# max_leaf_nodes 与 max_depth 在 HGB 里是并行的树规模约束：实验默认 max_depth=5
+# 时一棵树最多 32 个叶子，31 与 63 会退化成同一种模型（learning_rate 维度仍有效）。
+HGB_GRID_MAX_LEAF_NODES = (15, 31, 63)
+
+
+def _estimator_parameters(parameters: dict) -> dict:
+    """剥离平台控制开关，只把估计器认识的参数交给 sklearn。"""
+
+    return {key: value for key, value in parameters.items() if key != GRID_SEARCH_KEY}
+
+
+def _grid_search_enabled(algorithm: str, parameters: dict) -> bool:
+    """网格搜索默认关闭，只有显式开启且算法为 HGB 时才启用。"""
+
+    return algorithm == "hist_gradient_boosting" and bool(parameters.get(GRID_SEARCH_KEY))
+
+
+def _hgb_grid_candidates(parameters: dict) -> list[dict]:
+    """learning_rate × max_leaf_nodes 的 9 组小网格，其余实验参数原样保留。"""
+
+    base = _estimator_parameters(parameters)
+    return [
+        {**base, "learning_rate": float(learning_rate), "max_leaf_nodes": int(max_leaf_nodes)}
+        for learning_rate in HGB_GRID_LEARNING_RATES
+        for max_leaf_nodes in HGB_GRID_MAX_LEAF_NODES
+    ]
+
+
+def _cross_sectional_rank_ic(dates, scores, forward_returns):
+    """预测值与未来收益的日截面 Spearman 均值；当日不足两只股票则不计入。"""
+
+    frame = pd.DataFrame({
+        "date": pd.to_datetime(pd.Series(np.asarray(dates))).dt.normalize().to_numpy(),
+        "score": np.asarray(scores, dtype=float),
+        "forward_return": np.asarray(forward_returns, dtype=float),
+    }).replace([np.inf, -np.inf], np.nan).dropna()
+    daily = [
+        group["score"].corr(group["forward_return"], method="spearman")
+        for _, group in frame.groupby("date", sort=True)
+        if len(group) > 1
+    ]
+    observed = [float(value) for value in daily if pd.notna(value)]
+    return round(float(np.mean(observed)), 6) if observed else None
+
+
+def _run_hgb_grid_search(
+    parameters: dict,
+    *,
+    train_frame: pd.DataFrame,
+    train_features: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    test_features: pd.DataFrame,
+    fold,
+    horizon: int,
+    check_cancel=None,
+) -> dict:
+    """在首个调参折上搜索最优 HGB 超参，并返回可审计的候选结果。
+
+    特征矩阵由调用方传入并在后续折训练中复用，避免为每个候选重复计算截面
+    rank；选择依据是该折样本外预测概率与未来收益的日截面 Spearman 均值。
+    """
+
+    weights = _date_equal_weights(train_frame["date"])
+    candidates = []
+    for candidate in _hgb_grid_candidates(parameters):
+        if check_cancel:
+            check_cancel()
+        model = fit_time_ordered_sigmoid(
+            lambda candidate=candidate: _build_estimator("hist_gradient_boosting", candidate),
+            train_features, train_frame["label"], train_frame["date"],
+            purge_days=horizon, sample_weight=weights,
+        )
+        probability = model.predict_proba(test_features)[:, 1]
+        candidates.append({
+            "parameters": candidate,
+            "rank_ic": _cross_sectional_rank_ic(
+                test_frame["date"], probability, test_frame["future_return"]
+            ),
+        })
+    # max 返回首个最大值，因此并列时按网格声明顺序确定性取胜。
+    selected = max(candidates, key=lambda item: item["rank_ic"] if item["rank_ic"] is not None else float("-inf"))
+    return {
+        "kind": "hgb_learning_rate_leaf_nodes_grid_v1",
+        "selection_metric": "tuning_fold_rank_ic",
+        "selection_fold": {
+            "fold": fold.fold, "test_start": fold.test_start, "test_end": fold.test_end,
+            "test_rows": int(len(test_frame)),
+        },
+        "grid": {
+            "learning_rate": list(HGB_GRID_LEARNING_RATES),
+            "max_leaf_nodes": list(HGB_GRID_MAX_LEAF_NODES),
+        },
+        "candidates": candidates,
+        "selected": {"parameters": selected["parameters"], "rank_ic": selected["rank_ic"]},
+    }
+
+
+def _resolve_training_parameters(algorithm: str, parameters: dict, **grid_search) -> tuple[dict, dict | None]:
+    """返回真正用于训练的估计器参数与网格搜索结果（未启用时为 None）。"""
+
+    estimator_parameters = _estimator_parameters(parameters)
+    if not _grid_search_enabled(algorithm, parameters):
+        return estimator_parameters, None
+    report = _run_hgb_grid_search(parameters, **grid_search)
+    return {**estimator_parameters, **report["selected"]["parameters"]}, report
+
+
+def _fold_rank_ic_summary(fold_metrics: list[dict]) -> dict:
+    """折叠级 IC 汇总：各折均值与首末折衰减（早折高、晚折低即衰减为正）。"""
+
+    values = [fold.get("rank_ic") for fold in fold_metrics]
+    observed = [value for value in values if value is not None]
+    first, last = (values[0], values[-1]) if values else (None, None)
+    return {
+        "rank_ic_mean": round(float(np.mean(observed)), 6) if observed else None,
+        "rank_ic_decay": (
+            round(float(first - last), 6)
+            if first is not None and last is not None else None
+        ),
+    }
+
+
 def _date_equal_weights(dates) -> np.ndarray:
     """每个交易日等权的样本权重（均值归一为 1），防止成分股多的日期主导训练。"""
     counts = pd.Series(dates).value_counts()
@@ -337,12 +461,25 @@ def train_experiment(job_id: str) -> dict:
             embargo_days=horizon,
         )
         folds = list(split.tuning_folds)
+        # 网格搜索只在首个调参折上做一次，并复用该折训练用的截面 rank 特征，
+        # 避免为每个候选重复计算特征矩阵。
+        first_fold = folds[0]
+        first_train, first_test = frame.iloc[first_fold.train_index], frame.iloc[first_fold.test_index]
+        first_train_features = cross_sectional_rank_features(first_train, feature_columns)
+        first_test_features = cross_sectional_rank_features(first_test, feature_columns)
+        params, grid_search = _resolve_training_parameters(
+            algorithm, params,
+            train_frame=first_train, train_features=first_train_features,
+            test_frame=first_test, test_features=first_test_features,
+            fold=first_fold, horizon=horizon,
+            check_cancel=lambda: _check_cancel(jid),
+        )
         fold_metrics, prediction_frames = [], []
-        for fold in folds:
+        for index, fold in enumerate(folds):
             _check_cancel(jid)
             train, test = frame.iloc[fold.train_index], frame.iloc[fold.test_index]
-            train_features = cross_sectional_rank_features(train, feature_columns)
-            test_features = cross_sectional_rank_features(test, feature_columns)
+            train_features = first_train_features if index == 0 else cross_sectional_rank_features(train, feature_columns)
+            test_features = first_test_features if index == 0 else cross_sectional_rank_features(test, feature_columns)
             model = fit_time_ordered_sigmoid(
                 lambda: _build_estimator(algorithm, params),
                 train_features, train["label"], train["date"], purge_days=horizon,
@@ -357,6 +494,7 @@ def train_experiment(job_id: str) -> dict:
                 "train_rows": len(train), "test_rows": len(test),
                 "roc_auc": round(float(roc_auc_score(test.label, prob)), 6),
                 "balanced_accuracy": round(float(balanced_accuracy_score(test.label, pred)), 6),
+                "rank_ic": _cross_sectional_rank_ic(test["date"], prob, test["future_return"]),
                 "brier_score": fold_calibration["brier_score"],
                 "expected_calibration_error": fold_calibration["expected_calibration_error"],
             })
@@ -382,6 +520,9 @@ def train_experiment(job_id: str) -> dict:
                 "sealed": {"start": split.sealed_start, "end": split.sealed_end, "status": "locked"},
             },
             "folds": fold_metrics,
+            **_fold_rank_ic_summary(fold_metrics),
+            # economic_metrics 的输出原样透传，estimate_kind=research_proxy 标注
+            # 经济指标只是研究口径代理，不是可交易业绩承诺。
             **economic_metrics(predictions, horizon=horizon),
         }
         explanation=permutation_importance(
@@ -423,6 +564,9 @@ def train_experiment(job_id: str) -> dict:
             "fit_end": split.tuning_end,
             "sealed_start": split.sealed_start,
         }
+        if grid_search:
+            # 网格候选与最优参数一并留档，便于复核超参选择过程
+            reproducibility["grid_search"] = grid_search
         output = io.BytesIO()
         joblib.dump({"model": final_model, "features": feature_columns, "preprocessing": "daily_cross_sectional_percentile_rank_v1", "metrics": metrics, "reproducibility": reproducibility}, output)
         model_payload = output.getvalue()

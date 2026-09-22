@@ -30,6 +30,19 @@ class WalkForwardTests(unittest.TestCase):
         self.assertLess(result["cost_adjusted_return"], result["top_quantile_return"])
         self.assertIn("annualized_sharpe", result)
 
+    def test_economic_metrics_are_labelled_as_a_research_proxy(self):
+        rows = []
+        for date in pd.date_range("2024-01-01", periods=5, freq="B"):
+            rows.extend([
+                {"date": date, "symbol": "A", "probability": 0.9, "future_return": 0.01},
+                {"date": date, "symbol": "B", "probability": 0.1, "future_return": -0.01},
+            ])
+
+        result = economic_metrics(pd.DataFrame(rows), horizon=5)
+
+        # 口径标注：经济指标是研究代理，前端/报告据此避免当成实盘业绩
+        self.assertEqual(result["estimate_kind"], "research_proxy")
+
     def test_three_way_split_keeps_sealed_dates_out_of_tuning(self):
         dates = pd.Series(np.repeat(pd.date_range("2018-01-01", periods=500, freq="B"), 4))
         split = three_way_research_split(

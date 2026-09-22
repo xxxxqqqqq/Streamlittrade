@@ -37,7 +37,7 @@ class ExperimentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     dataset_id: UUID
     algorithm: Literal["hist_gradient_boosting", "random_forest", "extra_trees", "logistic_regression"] = "hist_gradient_boosting"
-    parameters: dict[str, int | float] = Field(default_factory=dict)
+    parameters: dict[str, int | float | bool] = Field(default_factory=dict)
     _formal_name=field_validator("name")(reject_corrupted_display_name)
 
     @model_validator(mode="after")
@@ -49,6 +49,10 @@ class ExperimentCreate(BaseModel):
             "logistic_regression": {"C": 1.0, "max_iter": 500},
         }
         allowed = set(defaults[self.algorithm])
+        # grid_search 是 HGB 专属的训练流程开关（tuning 折内 9 组小网格选参），
+        # 不传给 sklearn 估计器。
+        if self.algorithm == "hist_gradient_boosting":
+            allowed.add("grid_search")
         unknown = set(self.parameters).difference(allowed)
         if unknown: raise ValueError(f"当前算法不支持参数: {sorted(unknown)}")
         self.parameters = {**defaults[self.algorithm], **self.parameters}

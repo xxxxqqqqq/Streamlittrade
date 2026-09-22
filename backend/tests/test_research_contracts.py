@@ -125,3 +125,24 @@ class ResearchContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GridSearchParameterContractTests(unittest.TestCase):
+    """grid_search 是 HGB 专属开关，其他算法仍拒绝未知参数。"""
+
+    def test_hgb_accepts_grid_search_flag(self):
+        from backend.app.schemas.research import ExperimentCreate
+        request = ExperimentCreate(
+            name="grid", dataset_id=uuid4(), algorithm="hist_gradient_boosting",
+            parameters={"max_iter": 200, "grid_search": True},
+        )
+        self.assertTrue(request.parameters["grid_search"])
+        self.assertEqual(request.parameters["max_iter"], 200)
+
+    def test_other_algorithms_still_reject_it(self):
+        from backend.app.schemas.research import ExperimentCreate
+        with self.assertRaises(ValidationError):
+            ExperimentCreate(
+                name="grid", dataset_id=uuid4(), algorithm="random_forest",
+                parameters={"grid_search": True},
+            )

@@ -212,6 +212,67 @@ def _factor_metric_frame(frame, feature):
     return result
 
 
+DEDUP_CORRELATION_THRESHOLD=.7
+
+
+def _abs_pair_correlation(correlation,left,right):
+    """读取截面 Spearman 矩阵中的 |ρ|；缺失或非有限值一律按不相关处理。"""
+
+    if not correlation:return 0.0
+    value=(correlation.get(left) or {}).get(right)
+    if value is None:return 0.0
+    try:value=abs(float(value))
+    except (TypeError,ValueError):return 0.0
+    return value if np.isfinite(value) else 0.0
+
+
+def _greedy_dedup(factors,correlation,candidates,threshold=DEDUP_CORRELATION_THRESHOLD):
+    """按 |RankIC| 降序贪心去冗余，返回保留顺序与被挤掉的因子映射。
+
+    候选因子覆盖同一批股票与交易日，|ρ| 大于阈值说明两者提供几乎相同的截面
+    信息；全部保留会让下游模型在等价特征上重复下注（多重共线性），因此同一
+    相关簇里只保留单因子预测力（|RankIC|）最强的一个。缺失相关值视为无证据，
+    不做剔除。
+    """
+
+    def strength(slug):
+        try:value=abs(float((factors.get(slug) or {}).get("rank_ic_mean")))
+        except (TypeError,ValueError):return 0.0
+        return value if np.isfinite(value) else 0.0
+    ranked=sorted(candidates,key=lambda slug:(-strength(slug),slug))
+    kept,dropped=[],{}
+    for slug in ranked:
+        conflict=next(
+            (keeper for keeper in kept if _abs_pair_correlation(correlation,slug,keeper)>threshold),
+            None,
+        )
+        if conflict is None:kept.append(slug)
+        else:dropped[slug]=conflict
+    return kept,dropped
+
+
+def _apply_dedup(factors,correlation,selected,threshold=DEDUP_CORRELATION_THRESHOLD):
+    """把贪心去相关写回因子指标，返回最终入选列表与可审计的去冗余记录。
+
+    最终入选列表保持快照原始顺序（只有确实被剔除的因子会消失），下游数据集
+    的特征顺序因此与去重前一致；被剔除的因子记明挤掉它的因子与|ρ|。
+    """
+
+    _,dropped=_greedy_dedup(factors,correlation,selected,threshold)
+    for feature,keeper in dropped.items():
+        item=factors.get(feature)
+        if not item:continue
+        item["passed"]=False
+        item["dedup_dropped_by"]=keeper
+        item["dedup_abs_correlation"]=_finite(_abs_pair_correlation(correlation,feature,keeper))
+        item["reasons"].append(f"与已入选因子 {keeper} 高度相关")
+    return [feature for feature in selected if feature not in dropped],{
+        "method":"greedy_abs_spearman_v1",
+        "threshold":float(threshold),
+        "dropped":dropped,
+    }
+
+
 def research_factors(job_id:str):
     """Evaluate a feature snapshot using forward-return cross sections."""
 
@@ -323,6 +384,9 @@ def research_factors(job_id:str):
             left:{right:_finite(correlation.loc[left,right]) for right in feature_slugs}
             for left in feature_slugs
         }
+        # 多重检验只保证单因子显著，不保证因子之间互相独立；入选列表按 |RankIC|
+        # 降序贪心去相关后才交给下游数据集，screening.selected 仍是唯一的通过名单。
+        selected,dedup=_apply_dedup(results,correlation_payload,selected)
         metrics={
             "evaluation_scope":"factor_training_only",
             "forward_period":horizon,
@@ -354,6 +418,7 @@ def research_factors(job_id:str):
                     "min_ic_observations":min_ic_observations,
                 },
                 "multiple_testing":"benjamini_hochberg",
+                "dedup":dedup,
             },
         }
         with SyncSessionFactory() as s:
