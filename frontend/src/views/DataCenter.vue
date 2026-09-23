@@ -6,10 +6,11 @@ import {pollJobUntilTerminal} from '../jobPolling'
 import {user} from '../auth'
 import {selectedProjectId} from '../projects'
 import DataJobProgress from '../components/DataJobProgress.vue'
+import GuideCard from '../components/GuideCard.vue'
 import SectionTabs from '../components/SectionTabs.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import {dataTabs} from '../sections'
-import {Check,CheckCircle2,ChevronDown,Database,Download,Layers3,Plus,Search,Sparkles,X} from 'lucide-vue-next'
+import {Check,CheckCircle2,ChevronDown,Database,Download,FileSearch,Layers3,Plus,Search,SlidersHorizontal,Sparkles,X} from 'lucide-vue-next'
 
 const router=useRouter(),route=useRoute()
 
@@ -91,6 +92,99 @@ const materialForm=ref({
   feature_definition_ids:[] as string[],
 })
 
+// ── 快速同步：超市货架式入口 ────────────────────────────────
+// 页面只问三个问题——股票池、时间范围、数据源，其余参数走平台默认值。
+// 全量指数成分目前需要用户粘贴一次代码表（数据源按代码逐只下载），平台在
+// 当前浏览器会话内记住这份表，下次切换下拉不用重新粘贴。
+type PoolKey='hs300_fast'|'hs300_full'|'csi500'|'custom'
+type RangeKey='y5'|'y3'|'y10'|'custom'
+type PoolPreset={key:PoolKey;label:string;name:string;symbols:string[];hint:string}
+const isoDate=(value:Date)=>value.toISOString().slice(0,10)
+function rangeDates(years:number){
+  const end=new Date(),start=new Date(end)
+  start.setFullYear(end.getFullYear()-years)
+  return {start:isoDate(start),end:isoDate(end)}
+}
+const rangePresets:{key:Exclude<RangeKey,'custom'>;label:string;years:number}[]=[
+  {key:'y5',label:'近 5 年（推荐）',years:5},
+  {key:'y3',label:'近 3 年',years:3},
+  {key:'y10',label:'近 10 年',years:10},
+]
+// 沪深300 权重股代码表：最大的 20 只股票，先把整条流程快速跑通。
+const hs300Weight=['600519','000858','601318','600036','000333','600276','601888','600030','002415','600900','601012','000063','600585','601899','600050','000001','600000','601166','600028','601988']
+const poolPresets:PoolPreset[]=[
+  {key:'hs300_fast',label:'沪深300 权重20只（快）',name:'沪深300权重20只研究数据',symbols:hs300Weight,hint:'最大的 20 只权重股，几分钟同步完，适合先把流程跑通。'},
+  {key:'hs300_full',label:'沪深300 全量',name:'沪深300全量研究数据',symbols:[],hint:'全量成分需要粘贴一次完整代码表（数据源按代码逐只下载），平台会记住这份表。'},
+  {key:'csi500',label:'中证500 全量',name:'中证500全量研究数据',symbols:[],hint:'中证500 成分需要粘贴一次完整代码表，粘贴后平台会记住，下次直接用。'},
+  {key:'custom',label:'自选代码',name:'自选股票池研究数据',symbols:[],hint:'把要研究的代码粘进来，英文逗号或换行分隔。'},
+]
+const pool=ref<PoolKey>('hs300_fast')
+const range=ref<RangeKey>('y5')
+function poolPreset(key:PoolKey){return poolPresets.find(item=>item.key===key)||poolPresets[0]}
+const poolCodesKey=(key:PoolKey)=>`quant_pool_codes:${key}`
+function poolCodes(key:PoolKey){
+  const preset=poolPreset(key)
+  return preset.symbols.length?preset.symbols.join(','):(sessionStorage.getItem(poolCodesKey(key))||'')
+}
+function selectPool(key:PoolKey){
+  pool.value=key
+  syncForm.value.symbols=poolCodes(key)
+  // 名称跟着货架选项走，避免"沪深300全量"配着"权重20只"的数据名称。
+  syncForm.value.name=poolPreset(key).name
+}
+function selectRange(key:RangeKey){
+  range.value=key
+  if(key==='custom')return
+  const dates=rangeDates(rangePresets.find(item=>item.key===key)?.years||5)
+  syncForm.value.start_date=dates.start
+  syncForm.value.end_date=dates.end
+}
+// 下拉用可写 computed 绑定：选货架选项时同步改写下方参数，不额外引入事件处理。
+const poolModel=computed<PoolKey>({get:()=>pool.value,set:key=>selectPool(key)})
+const rangeModel=computed<RangeKey>({get:()=>range.value,set:key=>selectRange(key)})
+// 打开页面时从已保存的草稿反推下拉选项，避免下拉显示与实际同步参数不一致。
+function detectSelections(){
+  const current=syncForm.value.symbols.split(',').map(item=>item.trim()).filter(Boolean).join(',')
+  pool.value=poolPresets.find(preset=>poolCodes(preset.key)&&poolCodes(preset.key)===current)?.key||'custom'
+  const matchedRange=rangePresets.find(preset=>{
+    const dates=rangeDates(preset.years)
+    return dates.start===syncForm.value.start_date&&dates.end===syncForm.value.end_date
+  })
+  range.value=matchedRange?.key||'custom'
+}
+const symbolList=computed(()=>syncForm.value.symbols.split(/[,，\s]+/).map(item=>item.trim()).filter(Boolean))
+const poolEditable=computed(()=>pool.value!=='hs300_fast')
+const standardizedVersions=computed(()=>versions.value.filter(item=>item.layer==='standardized'))
+function sourceLabel(source:any){
+  const provider=String(source.provider).toLowerCase()
+  const suffix=provider==='baostock'?'Baostock（含估值字段 · 推荐）':provider==='akshare'?'AKShare（备用）':'演示数据（离线示例）'
+  return `${source.name} · ${suffix}`
+}
+// 已有数据：行内展开质量报告，内容指纹与血缘退到"高级信息"折叠区。
+const expandedVersion=ref('')
+function toggleQuality(id:string){expandedVersion.value=expandedVersion.value===id?'':id}
+function createdAt(value:string){return value?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}
+function versionInterval(version:any){
+  const specification=version.specification||{}
+  return specification.start_date&&specification.end_date?`${specification.start_date} ~ ${specification.end_date}`:'—'
+}
+function poolSummary(version:any){
+  const symbols=Array.isArray(version.specification?.symbols)?version.specification.symbols:[]
+  return symbols.length?`${symbols.length} 只`:'—'
+}
+// 质量报告里的警告码是机器枚举，界面统一翻成中文再展示。
+const WARNING_LABELS:Record<string,string>={
+  duplicate_dates:'存在重复交易日',
+  missing_required_values:'关键字段缺失',
+  invalid_ohlc:'最高/最低价与开收盘价矛盾',
+  nonpositive_prices:'出现非正价格',
+  unbalanced_symbol_calendar:'个股交易日历不齐（停牌或未上市）',
+}
+function warningText(version:any){
+  const warnings=version.quality_report?.warnings||[]
+  return warnings.length?warnings.map((item:string)=>WARNING_LABELS[item]||item).join('；'):'无'
+}
+
 const readyVersions=computed(()=>
   versions.value.filter(item=>item.layer==='standardized'&&item.status==='ready')
 )
@@ -163,6 +257,8 @@ watch(syncForm,value=>{
   // version detail page and back.  The draft is isolated by project and only
   // lasts for the current browser session.
   sessionStorage.setItem(syncDraftKey,JSON.stringify(value))
+  // 全量/自选股票池的代码表单独存一份，切换下拉不用重新粘贴。
+  if(pool.value!=='hs300_fast')sessionStorage.setItem(poolCodesKey(pool.value),value.symbols)
 },{deep:true})
 
 function versionSource(version:any){
@@ -221,6 +317,15 @@ async function load(){
       sources.value.find(item=>item.provider==='baostock')||sources.value[0]
     ).id
   }
+  // 首次进入且还没有任何数据版本时，直接用"沪深300权重20只 + 近5年"这套
+  // 推荐组合，用户点一次"开始同步"就能看到第一份可用数据。
+  if(!hadSavedSyncDraft&&!readyVersions.value.length){
+    selectPool('hs300_fast')
+    selectRange('y5')
+    syncForm.value.source_id=(sources.value.find(item=>item.provider==='baostock')||sources.value[0]||{id:''}).id
+  }else{
+    detectSelections()
+  }
   if(!materialForm.value.data_version_id&&readyVersions.value.length){
     materialForm.value.data_version_id=readyVersions.value[0].id
   }
@@ -268,7 +373,7 @@ async function finishDataJob(operation:DataJobOperation,resourceId:string){
   }
   materialForm.value.data_version_id=resourceId
   materialForm.value.name=`${syncForm.value.name} · 因子快照`
-  notice.value='数据同步与质量检查完成，新的 Standardized 版本已自动带入因子快照。'
+  notice.value='同步完成：数据已通过质量门禁并存成不可修改的数据版本，已自动带入下一步的因子快照。'
 }
 
 async function resumePendingJob(){
@@ -441,16 +546,126 @@ function clearSelectedFactors(){
 <template>
   <section>
     <SectionTabs :tabs="dataTabs" label="获取数据段页签"/>
-    <div class="hero">
-      <div>
-        <span class="eyebrow">DATA TO MODEL FACTORS</span>
-        <h2>从行情数据到可训练因子</h2>
-        <p>沿一条流水线完成数据接入、质量检查、因子定义和不可变因子快照。</p>
-      </div>
-    </div>
+    <GuideCard
+      :icon="Database"
+      title="这一步在干什么"
+      text="选择股票池和时间范围，点开始同步。平台自动下载、质检、清洗，存成不可篡改的研究数据。"
+    />
 
     <p v-if="error" class="error-box">{{error}}</p>
     <p v-if="notice" class="pipeline-notice"><CheckCircle2 :size="17"/>{{notice}}</p>
+
+    <article class="panel quick-sync">
+      <div class="panel-head"><div><h3>快速同步</h3><p>只回答三个问题，其余参数走平台默认值</p></div><Download :size="20"/></div>
+      <div class="quick-grid">
+        <div class="field quick-field">
+          <label>股票池</label>
+          <select v-model="poolModel">
+            <option v-for="preset in poolPresets" :key="preset.key" :value="preset.key">{{preset.label}}</option>
+          </select>
+          <small>{{poolPreset(pool).hint}}</small>
+        </div>
+        <div class="field quick-field">
+          <label>时间范围</label>
+          <select v-model="rangeModel">
+            <option v-for="preset in rangePresets" :key="preset.key" :value="preset.key">{{preset.label}}</option>
+            <option value="custom">自定义（手动填日期）</option>
+          </select>
+          <small>{{range==='custom'?`${syncForm.start_date} 至 ${syncForm.end_date}`:'从今天往前推算的完整区间'}}</small>
+        </div>
+        <div class="field quick-field">
+          <label>数据源</label>
+          <select v-model="syncForm.source_id">
+            <option v-for="source in sources" :key="source.id" :value="source.id">{{sourceLabel(source)}}</option>
+          </select>
+          <small>做估值类因子必须用带估值字段的数据源。</small>
+        </div>
+      </div>
+      <div class="quick-codes">
+        <div class="quick-codes-head"><b>股票代码</b><span>{{symbolList.length}} 只</span></div>
+        <textarea v-if="poolEditable" v-model="syncForm.symbols" rows="2" spellcheck="false" placeholder="600519,000858,…（逗号或换行分隔）"/>
+        <div v-else class="code-chips"><span v-for="code in symbolList" :key="code">{{code}}</span></div>
+      </div>
+      <div v-if="range==='custom'" class="quick-dates">
+        <div class="field"><label>开始日期</label><input v-model="syncForm.start_date" type="date"/></div>
+        <div class="field"><label>结束日期</label><input v-model="syncForm.end_date" type="date"/></div>
+      </div>
+      <div class="quick-actions">
+        <span class="quick-summary">将生成 <b>{{syncForm.name}}</b> · {{symbolList.length}} 只股票 · {{syncForm.start_date}} 至 {{syncForm.end_date}}</span>
+        <button class="primary" :disabled="busy||!sources.length||!symbolList.length" @click="sync"><Download :size="15"/>开始同步</button>
+      </div>
+      <DataJobProgress
+        v-if="activeOperation==='sync'&&activeJob"
+        operation="sync"
+        :status="activeJob.status"
+        :progress="activeJob.progress"
+        :worker-name="activeJob.worker_name"
+      />
+      <p class="quick-tip">同步会顺带跑一遍质量门禁：重复交易日、字段缺失、价格异常会被拦下并说明原因，问题数据不会进入研究流程。</p>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head"><div><h3>已有数据</h3><p>数据版本与质量 · 最近 200 个不可变数据资产（标准层；原始层只在版本详情里查看）</p></div><button class="secondary" @click="load"><FileSearch :size="15"/>刷新</button></div>
+      <div class="version-table">
+        <div class="version-row version-head"><span>名称</span><span>股票池</span><span>区间</span><span>行数</span><span>同步时间</span><span>状态</span><span>操作</span></div>
+        <template v-for="version in standardizedVersions" :key="version.id">
+          <div class="version-row">
+            <RouterLink class="version-name product-link-row" :to="`/data-center/versions/${version.id}`">
+              <b>{{dataVersionName(version)}}</b>
+              <small>{{version.specification?.symbols?.length||0}} 只股票</small>
+            </RouterLink>
+            <span>{{poolSummary(version)}}</span>
+            <span>{{versionInterval(version)}}</span>
+            <span>{{version.row_count||'—'}}</span>
+            <span>{{createdAt(version.created_at)}}</span>
+            <span><StatusBadge :status="version.status"/></span>
+            <span><button class="text-button" :aria-expanded="expandedVersion===version.id" @click="toggleQuality(version.id)"><FileSearch :size="14"/>{{expandedVersion===version.id?'收起质量报告':'查看质量报告'}}</button></span>
+          </div>
+          <div v-if="expandedVersion===version.id" class="quality-panel">
+            <div class="quality-grid">
+              <div><small>标的数</small><b>{{version.quality_report?.symbol_count??'—'}}</b></div>
+              <div><small>停牌记录</small><b>{{version.quality_report?.suspended_rows??0}}</b></div>
+              <div><small>日历缺口</small><b>{{version.quality_report?.missing_calendar_rows??0}}</b></div>
+              <div><small>每日可用股票</small><b>{{version.quality_report?.dynamic_universe?.average_daily_members??'—'}}</b></div>
+              <div class="quality-warning"><small>质量警告</small><b>{{warningText(version)}}</b></div>
+            </div>
+            <details class="advanced-info">
+              <summary>高级信息：内容指纹 / 血缘</summary>
+              <dl class="detail-list">
+                <div><dt>数据层级</dt><dd>{{version.layer==='raw'?'原始层（未清洗）':'标准层（已过质量门禁）'}}</dd></div>
+                <div><dt>内容 SHA256</dt><dd><code>{{version.content_sha256||'—'}}</code></dd></div>
+                <div><dt>父版本 SHA256</dt><dd><code>{{version.lineage?.parent_sha256?.slice(0,24)||'—'}}</code></dd></div>
+                <div><dt>数据来源</dt><dd>{{version.lineage?.provider||'—'}} · {{version.lineage?.source_slug||'—'}}</dd></div>
+                <div><dt>转换规则</dt><dd>{{version.lineage?.transform||'—'}}</dd></div>
+                <RouterLink class="text-button" :to="`/data-center/versions/${version.id}`">打开版本详情</RouterLink>
+              </dl>
+            </details>
+          </div>
+        </template>
+        <div v-if="loaded&&!standardizedVersions.length" class="empty">还没有数据：在上面选好股票池和时间范围，点「开始同步」即可。</div>
+      </div>
+    </article>
+
+    <article ref="snapshotPanel" class="panel" :class="{'panel-focus':route.query.focus==='snapshots'}">
+      <div class="panel-head"><div><h3>因子快照</h3><p>把标准数据和选定因子版本绑定成一份不可变的因子表，训练与检验都用它</p></div></div>
+      <div class="table">
+        <div class="tr th"><span>名称</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
+        <RouterLink v-for="snapshot in snapshots" :key="snapshot.id" class="tr product-link-row" :to="`/data-center/snapshots/${snapshot.id}`">
+          <b>{{snapshot.name}}</b>
+          <span><StatusBadge :status="snapshot.status"/></span>
+          <span>{{snapshot.row_count||'—'}}</span>
+          <code>{{snapshot.content_sha256?.slice(0,16)||'—'}}</code>
+        </RouterLink>
+        <div v-if="loaded&&!snapshots.length" class="empty">还没有因子快照：在下面的「高级选项」里定义模型因子，再生成快照。</div>
+      </div>
+    </article>
+
+    <details class="advanced-panel" :open="route.query.focus==='snapshots'">
+      <summary>
+        <SlidersHorizontal :size="15"/>
+        <b>高级选项</b>
+        <span>手动逐步控制：数据源登记 · 标准化门禁与动态股票池 · 因子定义 · 因子快照生成</span>
+      </summary>
 
     <div class="pipeline-progress">
       <div
@@ -548,7 +763,7 @@ function clearSelectedFactors(){
             <div class="field"><label>开始日期</label><input v-model="syncForm.start_date" type="date"/></div>
             <div class="field"><label>结束日期</label><input v-model="syncForm.end_date" type="date"/></div>
             <button class="primary compact-action" :disabled="busy||!sources.length" @click="sync">
-              <Download :size="15"/>同步并通过质量门禁
+              <Download :size="15"/>开始同步（按当前参数）
             </button>
           </div>
           <DataJobProgress
@@ -793,33 +1008,7 @@ function clearSelectedFactors(){
       </div>
     </article>
 
-    <article class="panel">
-      <div class="panel-head"><div><h3>数据版本与质量</h3><p>最近200个不可变数据资产</p></div></div>
-      <div class="table">
-        <div class="tr th"><span>数据名称 / 层级</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
-        <RouterLink v-for="version in versions" :key="version.id" class="tr product-link-row" :to="`/data-center/versions/${version.id}`">
-          <b>{{dataVersionName(version)}} · {{version.layer}}</b>
-          <span><StatusBadge :status="version.status"/></span>
-          <span>{{version.row_count||'—'}}</span>
-          <code>{{version.content_sha256?.slice(0,16)||'—'}}</code>
-        </RouterLink>
-        <div v-if="loaded&&!versions.length" class="empty">还没有数据版本，请先在第 2 步同步行情并通过质量门禁。</div>
-      </div>
-    </article>
-
-    <article ref="snapshotPanel" class="panel" :class="{'panel-focus':route.query.focus==='snapshots'}">
-      <div class="panel-head"><div><h3>特征快照</h3><p>分布画像、缺失率和完整血缘</p></div></div>
-      <div class="table">
-        <div class="tr th"><span>名称</span><span>状态</span><span>行数</span><span>内容哈希</span></div>
-        <RouterLink v-for="snapshot in snapshots" :key="snapshot.id" class="tr product-link-row" :to="`/data-center/snapshots/${snapshot.id}`">
-          <b>{{snapshot.name}}</b>
-          <span><StatusBadge :status="snapshot.status"/></span>
-          <span>{{snapshot.row_count||'—'}}</span>
-          <code>{{snapshot.content_sha256?.slice(0,16)||'—'}}</code>
-        </RouterLink>
-        <div v-if="loaded&&!snapshots.length" class="empty">还没有特征快照，请先在第 3 步登记模型因子，再用第 4 步生成快照。</div>
-      </div>
-    </article>
+    </details>
   </section>
 </template>
 
@@ -910,4 +1099,53 @@ function clearSelectedFactors(){
 @media(max-width:1000px){.universe-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pipeline-progress{grid-template-columns:repeat(2,1fr)}.pipeline-progress-item:nth-child(2):after{display:none}.factor-templates{grid-template-columns:repeat(4,minmax(0,1fr))}.factor-form{grid-template-columns:1fr 1fr}.factor-form .compact-action{grid-column:1/-1}.advanced-source-form{grid-template-columns:1fr 1fr}.advanced-source-form .compact-action{grid-column:1/-1}}
 @media(max-width:720px){.pipeline-progress{grid-template-columns:1fr}.pipeline-progress-item:after{display:none}.pipeline-title{align-items:flex-start;gap:14px;flex-direction:column}.pipeline-step{grid-template-columns:38px 1fr;padding:0 14px}.pipeline-marker i{width:28px;height:28px}.compact-grid,.source-selector,.factor-form,.snapshot-grid,.sync-identity-grid{grid-template-columns:1fr}.factor-templates{grid-template-columns:repeat(2,minmax(0,1fr))}.factor-mode-title,.expression-builder-head{align-items:flex-start;flex-direction:column}.expression-examples{justify-content:flex-start}.advanced-source-form .compact-action,.factor-form .compact-action{grid-column:auto}.selection-summary{flex-wrap:wrap}.selection-summary span{margin-left:0}.snapshot-summary{grid-template-columns:1fr 1fr}.snapshot-actions{align-items:stretch;flex-direction:column}.snapshot-action{width:100%;justify-content:center}}
 .compact-grid{align-items:start}.compact-action{align-self:end}
+/* ── 快速同步（超市货架） ─────────────────────────────── */
+.quick-sync{padding:20px 22px;margin-bottom:16px;background:linear-gradient(150deg,#fbfdff,#fff)}
+.quick-sync .panel-head{margin-bottom:15px}
+.quick-sync .panel-head>svg{color:#3978c8}
+.quick-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.quick-field{margin:0;min-width:0}
+.quick-field small{display:block;margin-top:6px;color:#8a96a6;font-size:10px;line-height:1.5}
+.quick-codes{margin-top:13px;padding:11px 12px;border:1px solid #e2e8f0;border-radius:9px;background:#fafbfd}
+.quick-codes-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.quick-codes-head b{color:#35445a;font-size:11px}
+.quick-codes-head span{color:#8290a2;font-size:10px}
+.quick-codes textarea{width:100%;resize:vertical;border:1px solid #dbe3ec;border-radius:8px;background:#fff;color:#34445a;padding:9px 10px;font:11px/1.6 Consolas,monospace}
+.code-chips{display:flex;flex-wrap:wrap;gap:5px;max-height:74px;overflow:auto}
+.code-chips span{padding:3px 7px;border-radius:6px;background:#eef2f7;color:#4f637b;font:10px Consolas,monospace}
+.quick-dates{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-top:13px}
+.quick-actions{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;flex-wrap:wrap}
+.quick-summary{color:#7f8d9f;font-size:11px;min-width:0}
+.quick-summary b{color:#2f4057}
+.quick-tip{margin:11px 0 0;color:#8995a5;font-size:10px;line-height:1.55}
+/* ── 已有数据 ────────────────────────────────────────── */
+.version-table{overflow-x:auto}
+.version-row{display:grid;grid-template-columns:minmax(190px,1.5fr) .6fr 1.1fr .6fr .9fr .7fr .95fr;gap:16px;align-items:center;min-width:1000px;padding:13px 22px;border-top:1px solid #edf0f4;font-size:12px;color:#4c5c72}
+.version-head{border-top:0;background:#f8fafc;color:#8390a1;font-size:10px;font-weight:700;letter-spacing:.55px;text-transform:uppercase}
+.version-name{display:block;min-width:0}
+.version-name b,.version-name small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.version-name b{color:#2f4057;font-size:12px}
+.version-name small{margin-top:4px;color:#8b97a7;font-size:10px}
+.quality-panel{padding:14px 22px 18px;border-top:1px dashed #e2e8f0;background:#f9fbfe}
+.quality-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 2fr;gap:9px}
+.quality-grid>div{padding:10px;border:1px solid #e4e9ef;border-radius:8px;background:#fff}
+.quality-grid small,.quality-grid b{display:block}
+.quality-grid small{color:#8b97a7;font-size:9px}
+.quality-grid b{margin-top:4px;color:#344257;font-size:11px}
+.quality-warning{border-color:#f2e3c8!important;background:#fdf8ee!important}
+.quality-warning b{color:#a76a08}
+.advanced-info{margin-top:11px;border:1px dashed #dce3eb;border-radius:9px;background:#fff}
+.advanced-info summary{padding:10px 12px;color:#617086;font-size:11px;cursor:pointer}
+.advanced-info .detail-list{padding:0 12px 12px}
+/* ── 高级选项折叠 ───────────────────────────────────── */
+.advanced-panel{margin-top:16px;border:1px solid #dfe6ef;border-radius:12px;background:#fff;box-shadow:0 3px 12px #1f385208}
+.advanced-panel>summary{display:flex;align-items:center;gap:9px;padding:15px 20px;color:#36516f;cursor:pointer;font-size:12px}
+.advanced-panel>summary b{font-size:13px}
+.advanced-panel>summary span{color:#8290a2;font-size:10px}
+.advanced-panel>summary svg{color:#3978c8;flex:none}
+.advanced-panel[open]>summary{border-bottom:1px solid #e9edf2}
+.advanced-panel .pipeline-progress{margin:16px 20px}
+.advanced-panel .data-pipeline{border:0;box-shadow:none;margin:0}
+@media(max-width:1000px){.quick-grid{grid-template-columns:1fr 1fr}.quality-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:720px){.quick-sync{padding:15px}.quick-grid,.quick-dates{grid-template-columns:1fr}.quick-actions{align-items:stretch;flex-direction:column}.advanced-panel>summary{align-items:flex-start;flex-direction:column;gap:5px}}
 </style>

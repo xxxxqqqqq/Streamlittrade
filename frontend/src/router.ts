@@ -31,7 +31,7 @@ export const router=createRouter({
   history:createWebHistory(),
   routes:[
     {path:'/login',component:Login,meta:{title:'登录',public:true}},
-    {path:'/',component:Dashboard,meta:{title:'研究工作台'}},
+    {path:'/',component:Dashboard,meta:{title:'研究控制台'}},
     {path:'/data-center',component:DataCenter,meta:{title:'获取数据'}},
     {path:'/factor-research',component:FactorResearch,meta:{title:'因子研究'}},
     {path:'/data-center/versions/:id',component:DataVersionDetail,meta:{title:'数据质量详情'}},

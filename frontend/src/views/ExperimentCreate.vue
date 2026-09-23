@@ -19,6 +19,14 @@ const form=ref({
   C:1.0,
 })
 const readyDatasets=computed(()=>datasets.value.filter(item=>item.status==='ready'))
+// 算法选项必须说人话：用户选的是"想拿哪种模型试"，不是一串 sklearn 类名。
+const algorithmHints:Record<string,string>={
+  hist_gradient_boosting:'梯度提升树：最常用，擅长从多个弱因子里找组合规律，先跑它。',
+  random_forest:'随机森林：结果更稳但更钝，适合当对照组。',
+  extra_trees:'极端随机树：横截面增强版随机森林，波动更大，用来做对照。',
+  logistic_regression:'逻辑回归：线性基准线，用来判断非线性模型到底有没有加分。',
+}
+const algorithmHint=computed(()=>algorithmHints[form.value.algorithm]||'')
 
 onMounted(async()=>{
   datasets.value=(await api.get('/datasets')).data
@@ -59,21 +67,26 @@ async function submit(){
         <div class="field full"><label>实验名称</label><input v-model="form.name" required minlength="2"/></div>
         <div class="field full"><label>已就绪数据集</label><select v-model="form.dataset_id" required><option disabled value="">请选择数据集</option><option v-for="item in readyDatasets" :key="item.id" :value="item.id">{{item.name}} · {{item.row_count}} 行</option></select></div>
         <div class="form-grid">
-          <div class="field full"><label>算法</label><select v-model="form.algorithm"><option value="hist_gradient_boosting">Histogram Gradient Boosting</option><option value="extra_trees">Extra Trees（横截面增强）</option><option value="random_forest">Random Forest</option><option value="logistic_regression">Logistic Regression</option></select></div>
-          <template v-if="form.algorithm==='hist_gradient_boosting'">
-            <div class="field"><label>最大迭代次数</label><input v-model.number="form.max_iter" type="number" min="10"/></div>
-            <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
-            <div class="field"><label>学习率</label><input v-model.number="form.learning_rate" type="number" min="0.001" step="0.001"/></div>
-          </template>
-          <template v-else-if="['random_forest','extra_trees'].includes(form.algorithm)">
-            <div class="field"><label>树数量</label><input v-model.number="form.n_estimators" type="number" min="10"/></div>
-            <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
-            <div class="field"><label>叶节点最小样本</label><input v-model.number="form.min_samples_leaf" type="number" min="1"/></div>
-          </template>
-          <template v-else>
-            <div class="field"><label>正则强度 C</label><input v-model.number="form.C" type="number" min="0.001" step="0.1"/></div>
-            <div class="field"><label>最大迭代次数</label><input v-model.number="form.max_iter" type="number" min="10"/></div>
-          </template>
+          <div class="field full"><label>算法</label><select v-model="form.algorithm"><option value="hist_gradient_boosting">梯度提升树（推荐：擅长组合弱因子）</option><option value="random_forest">随机森林（更稳更钝）</option><option value="extra_trees">极端随机树（横截面增强）</option><option value="logistic_regression">逻辑回归（线性基准线）</option></select><small v-if="algorithmHint">{{algorithmHint}}</small></div>
+          <details class="advanced-options">
+            <summary>高级选项：树深 / 学习率 / 树数量</summary>
+            <div class="form-grid advanced-grid">
+              <template v-if="form.algorithm==='hist_gradient_boosting'">
+                <div class="field"><label>最大迭代次数</label><input v-model.number="form.max_iter" type="number" min="10"/></div>
+                <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
+                <div class="field"><label>学习率</label><input v-model.number="form.learning_rate" type="number" min="0.001" step="0.001"/></div>
+              </template>
+              <template v-else-if="['random_forest','extra_trees'].includes(form.algorithm)">
+                <div class="field"><label>树数量</label><input v-model.number="form.n_estimators" type="number" min="10"/></div>
+                <div class="field"><label>树最大深度</label><input v-model.number="form.max_depth" type="number" min="1"/></div>
+                <div class="field"><label>叶节点最小样本</label><input v-model.number="form.min_samples_leaf" type="number" min="1"/></div>
+              </template>
+              <template v-else>
+                <div class="field"><label>正则强度 C</label><input v-model.number="form.C" type="number" min="0.001" step="0.1"/></div>
+                <div class="field"><label>最大迭代次数</label><input v-model.number="form.max_iter" type="number" min="10"/></div>
+              </template>
+            </div>
+          </details>
         </div>
         <div v-if="job" class="job-progress"><div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待训练资源':'正在训练、解释和评估模型'}}</span><b>{{job.progress}}%</b></div><div class="progress-track"><i :style="{width:job.progress+'%'}"></i></div></div>
         <div v-if="longRunning" class="background-task-note">训练仍在后台运行。可以继续等待，或前往 <button type="button" class="text-button" @click="router.push('/jobs')">任务中心</button> 查看进度；离开本页不会取消任务。</div>
@@ -84,3 +97,9 @@ async function submit(){
     </article>
   </section>
 </template>
+
+<style scoped>
+.advanced-options{grid-column:1/-1;margin-top:4px;border:1px dashed #dce3eb;border-radius:9px;background:#fafbfd}
+.advanced-options>summary{padding:10px 12px;color:#617086;font-size:11px;cursor:pointer}
+.advanced-grid{padding:0 12px 12px;margin:0}
+</style>

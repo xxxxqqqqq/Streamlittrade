@@ -4,6 +4,7 @@ import {useRouter} from 'vue-router'
 import {api} from '../api'
 import {FlaskConical,Plus,RefreshCw,ScrollText} from 'lucide-vue-next'
 import SectionTabs from '../components/SectionTabs.vue'
+import GuideCard from '../components/GuideCard.vue'
 import {backtestTabs} from '../sections'
 
 const router=useRouter()
@@ -62,6 +63,11 @@ onMounted(load)
 <template>
   <section>
     <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
+    <GuideCard
+      :icon="FlaskConical"
+      title="这一步在干什么"
+      text="这是不用模型的备选信号：规则策略（右侧趋势、V 型反转）先在历史里跑一遍，能跑通再拿去回测。"
+    />
     <div class="page-intro">
       <div><h2>策略版本管理</h2><p>平台审核过的内置实现与不可变参数版本</p></div>
       <button class="secondary" @click="load"><RefreshCw :size="16" :class="{spin:loading}"/>刷新</button>

@@ -73,12 +73,12 @@ onUnmounted(()=>{window.clearInterval(refreshTimer);document.removeEventListener
   <div v-else class="shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <RouterLink class="topbar-brand" to="/" aria-label="返回研究工作台" title="返回研究工作台">
+        <RouterLink class="topbar-brand" to="/" aria-label="返回研究控制台" title="返回研究控制台">
           <span class="brand-mark">Q</span>
-          <span class="brand-copy"><strong>QuantForge</strong><small>RESEARCH PLATFORM</small></span>
+          <span class="brand-copy"><strong>QuantForge</strong><small>RESEARCH</small></span>
         </RouterLink>
         <nav class="topbar-nav" aria-label="五段研究流">
-          <RouterLink v-for="segment in flowSegments" :key="segment.key" class="nav-pill" :class="{active:activeSegmentKey===segment.key}" :aria-current="activeSegmentKey===segment.key?'page':undefined" :to="segment.to"><component :is="segment.icon" :size="16"/><span>{{segment.label}}</span></RouterLink>
+          <RouterLink v-for="segment in flowSegments" :key="segment.key" class="nav-pill" :class="{active:activeSegmentKey===segment.key}" :aria-current="activeSegmentKey===segment.key?'page':undefined" :title="segment.label" :to="segment.to"><component :is="segment.icon" :size="16"/><span>{{segment.label}}</span></RouterLink>
         </nav>
         <div class="topbar-actions">
           <button class="icon-btn" aria-label="搜索" title="全局搜索" @click="searchOpen=true"><Search :size="18"/></button>
@@ -108,3 +108,11 @@ onUnmounted(()=>{window.clearInterval(refreshTimer);document.removeEventListener
   </div>
   <ToastCenter/>
 </template>
+
+<style scoped>
+/* 对齐设计稿的顶栏形状：五段一级入口是圆角 pill，工具按钮 10px 圆角。
+   尺寸与配色仍由 topbar.css 定义，这里只做形状微调，不重刷全局色板。 */
+.topbar-nav .nav-pill{border-radius:99px;padding:0 15px}
+.topbar-actions .icon-btn{border-radius:10px}
+@media(max-width:900px){.topbar-nav .nav-pill{padding:0 12px}}
+</style>

@@ -5,6 +5,9 @@ import {Activity,CheckCircle2,Filter,FlaskConical,RefreshCw,XCircle} from 'lucid
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import SectionTabs from '../components/SectionTabs.vue'
+import GuideCard from '../components/GuideCard.vue'
+import VerdictBadge from '../components/VerdictBadge.vue'
+import {rankIcVerdict} from '../verdict'
 import {factorTabs} from '../sections'
 
 const route=useRoute()
@@ -31,7 +34,20 @@ const form=ref({
 const selectedRun=computed(()=>runs.value.find(item=>item.id===selectedRunId.value))
 const factorRows=computed(()=>Object.entries(selectedRun.value?.metrics?.factors||{}).map(([slug,metrics])=>({slug,...metrics as any})))
 const factorSlugs=computed(()=>factorRows.value.map(item=>item.slug))
-
+// 去冗余结果：被合并的因子写明和谁高度相关，用户不用自己去相关性矩阵里找。
+const dedupNotes=computed<Record<string,string>>(()=>{
+  const notes:Record<string,string>={}
+  for(const [slug,keeper] of Object.entries(selectedRun.value?.metrics?.screening?.dedup?.dropped||{}))notes[slug]=String(keeper)
+  return notes
+})
+const mergedNotes=computed(()=>Object.entries(dedupNotes.value).map(([slug,keeper])=>`${slug} 与 ${keeper} 高度相关，已合并`))
+const selectedCount=computed(()=>selectedRun.value?.selected_feature_slugs?.length||0)
+function rowSummary(row:any){
+  const reasons=(row.reasons||[]) as string[]
+  const merged=dedupNotes.value[row.slug]
+  if(merged)return [...reasons.filter(reason=>!reason.includes('高度相关')),`与已入选因子 ${merged} 高度相关，已合并`].join('；')
+  return reasons.length?reasons.join('；'):'达到全部门槛'
+}
 function percent(value:any){
   return value===null||value===undefined?'—':`${(Number(value)*100).toFixed(2)}%`
 }
@@ -90,36 +106,33 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 <template>
   <section>
     <SectionTabs :tabs="factorTabs" label="因子段页签"/>
-    <div class="hero factor-hero">
-      <div>
-        <span class="eyebrow">FACTOR RESEARCH & SCREENING</span>
-        <h2>因子研究与筛选</h2>
-        <p>使用未来收益检验因子的覆盖率、IC稳定性、分层收益、换手率与相关性，筛选后再进入建模。</p>
-      </div>
-      <Filter :size="52"/>
-    </div>
+    <GuideCard
+      :icon="Filter"
+      title="这一步在干什么"
+      text="因子是「选股的理由」。这里用历史数据检验哪些理由真的有效，无效的不要带进训练。"
+    />
 
     <p v-if="error" class="error-box">{{error}}</p>
     <p v-if="notice" class="research-notice"><CheckCircle2 :size="16"/>{{notice}}</p>
 
     <article class="panel research-create">
       <div class="panel-head">
-        <div><h3>发起因子检验</h3><p>一个研究任务绑定一个不可变因子快照，结果可以重复审计。</p></div>
+        <div><h3>新建检验</h3><p>基于一份因子快照，检验每个因子的选股区分度、稳定性、分层收益和换手率。</p></div>
         <FlaskConical :size="22"/>
       </div>
       <div class="research-form">
-        <div class="field"><label>研究名称</label><input v-model="form.name"/></div>
+        <div class="field"><label>检验名称</label><input v-model="form.name"/></div>
         <div class="field snapshot-field">
-          <label>不可变因子快照</label>
+          <label>因子表（快照）</label>
           <select v-model="form.snapshot_id">
-            <option disabled value="">请先在数据中心生成快照</option>
+            <option disabled value="">请先在数据中心生成因子快照</option>
             <option v-for="snapshot in snapshots" :key="snapshot.id" :value="snapshot.id">
               {{snapshot.name}} · {{snapshot.row_count}}行 · {{snapshot.feature_definition_ids.length}}因子
             </option>
           </select>
         </div>
         <div class="field"><label>预测周期（交易日）</label><input v-model.number="form.forward_period" type="number" min="1" max="60"/></div>
-        <div class="field"><label title="因子仅使用训练区数据筛选，调参区和最终封存区不会参与本步骤。">训练区比例</label><input v-model.number="form.training_fraction" type="number" min=".3" max=".8" step=".05"/></div>
+        <div class="field"><label title="因子只使用训练区数据筛选，验证区和终检区不会参与本步骤。">训练区比例</label><input v-model.number="form.training_fraction" type="number" min=".3" max=".8" step=".05"/></div>
         <div class="field"><label>分层数量</label><input v-model.number="form.quantiles" type="number" min="2" max="10"/></div>
         <div class="field"><label>最低覆盖率</label><input v-model.number="form.min_coverage" type="number" min="0" max="1" step=".05"/></div>
         <div class="field"><label>最低 |Rank IC|</label><input v-model.number="form.min_abs_rank_ic" type="number" min="0" max="1" step=".01"/></div>
@@ -128,14 +141,14 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
         <div class="field"><label>最少IC观测</label><input v-model.number="form.min_ic_observations" type="number" min="10" max="1000"/></div>
         <button class="primary research-submit" :disabled="busy||!form.snapshot_id" @click="createResearch">
           <Activity v-if="busy" :size="15"/><FlaskConical v-else :size="15"/>
-          {{busy?'正在检验因子…':'运行因子研究'}}
+          {{busy?'正在检验…':'开始检验'}}
         </button>
       </div>
     </article>
 
     <article class="panel">
       <div class="panel-head research-result-head">
-        <div><h3>研究结果</h3><p>选择一次历史研究，查看当时参数和不可变结论。</p></div>
+        <div><h3>检验结果</h3><p>选股区分度看 Rank IC 的绝对值大小，方向（正向/反向）看符号。</p></div>
         <select v-model="selectedRunId">
           <option v-for="run in runs" :key="run.id" :value="run.id">{{run.name}} · {{run.status}}</option>
         </select>
@@ -145,14 +158,14 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
           <div><small>样本行数</small><b>{{selectedRun.metrics.sample_rows}}</b></div>
           <div><small>预测周期</small><b>{{selectedRun.metrics.forward_period}}日</b></div>
           <div><small>检验因子</small><b>{{factorRows.length}}</b></div>
-          <div class="passed"><small>通过筛选</small><b>{{selectedRun.selected_feature_slugs.length}}</b></div>
+          <div class="passed"><small>通过筛选</small><b>{{selectedCount}}</b></div>
           <div><small>训练区检验区间</small><b>{{selectedRun.metrics.date_min}} → {{selectedRun.metrics.date_max}}</b></div>
-          <div><small>未读取区域</small><b>{{selectedRun.metrics.research_protocol?.training_boundary}} → {{selectedRun.metrics.full_date_max}}</b></div>
+          <div><small>未读取区域（验证区 + 终检区）</small><b>{{selectedRun.metrics.research_protocol?.training_boundary}} → {{selectedRun.metrics.full_date_max}}</b></div>
         </div>
 
         <div class="factor-result-table">
           <div class="factor-result-row head">
-            <span>因子</span><span>筛选</span><span>覆盖率</span><span>Rank IC</span>
+            <span>因子</span><span>筛选</span><span>覆盖率</span><span>选股区分度（Rank IC）</span><span>判断</span>
             <span>IC IR</span><span>p 值</span><span>BH q 值</span><span>年化分层差</span><span>换手率</span><span>结论</span>
           </div>
           <div v-for="row in factorRows" :key="row.slug" class="factor-result-row">
@@ -160,14 +173,21 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
             <span><i class="screen-status" :class="{passed:row.passed}"><CheckCircle2 v-if="row.passed" :size="12"/><XCircle v-else :size="12"/>{{row.passed?'通过':'淘汰'}}</i></span>
             <span>{{percent(row.coverage)}}</span>
             <span :class="{positive:Number(row.rank_ic_mean)>0,negative:Number(row.rank_ic_mean)<0}">{{number(row.rank_ic_mean)}}</span>
+            <span><VerdictBadge :verdict="rankIcVerdict(row.rank_ic_mean)"/></span>
             <span>{{number(row.rank_ic_ir,2)}}</span>
             <span>{{number(row.rank_ic_p_value,4)}}</span>
             <span>{{number(row.rank_ic_q_value,4)}}</span>
             <span>{{percent(row.quantile?.annualized_spread)}}</span>
             <span>{{percent(row.quantile?.turnover)}}</span>
-            <small>{{row.reasons?.join('、')||'达到全部门槛'}}</small>
+            <small>{{rowSummary(row)}}</small>
           </div>
         </div>
+
+        <p class="threshold-note">
+          ⓘ 判断口径：区分度 |Rank IC| ≥ 0.03 且通过多重检验（BH q 值 ≤ 假发现率）才算有效；信号方向看符号，负值代表反向有效（分数越高越差）。
+          <template v-if="mergedNotes.length">高度相关因子已自动合并（去冗余）：{{mergedNotes.join('；')}}。</template>
+          <template v-else>当前没有因子因高度相关被合并。</template>
+        </p>
 
         <div v-if="factorSlugs.length" class="correlation-section">
           <div><h3>因子Rank相关性</h3><p>绝对相关性越接近1，两个因子提供的信息越重复。</p></div>
@@ -187,13 +207,13 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
       <div v-else-if="selectedRun" class="empty research-empty">
         <RefreshCw :size="22"/><b>{{selectedRun.status}}</b><span>{{selectedRun.error_message||'任务尚未生成可用结果'}}</span>
       </div>
-      <div v-else class="empty research-empty">尚无因子研究记录，请先选择快照并运行检验。</div>
+      <div v-else class="empty research-empty">还没有因子检验记录：先选一份因子快照，点「开始检验」。</div>
     </article>
   </section>
 </template>
 
 <style scoped>
-.factor-hero{display:flex;align-items:center;justify-content:space-between}.factor-hero>svg{color:#45d7c5;opacity:.75}
+.threshold-note{margin:14px 0 0;padding:11px 13px;border:1px solid #e3e8f0;border-radius:9px;background:#f7f9fc;color:#61708a;font-size:11px;line-height:1.7}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
 .research-form{display:grid;grid-template-columns:minmax(150px,1fr) minmax(270px,1.6fr) repeat(8,minmax(112px,.72fr)) minmax(172px,auto);gap:10px;align-items:end}.research-form .field{min-width:0;margin:0}.research-form .field>label{white-space:nowrap}
@@ -201,7 +221,7 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 .research-result-head select{min-width:260px}
 .research-kpis{display:grid;grid-template-columns:repeat(4,.7fr) repeat(2,1.3fr);gap:9px;margin-bottom:16px}
 .research-kpis>div{padding:12px;border:1px solid #e3e9f0;border-radius:9px;background:#fafbfd}.research-kpis small,.research-kpis b{display:block}.research-kpis small{color:#8a96a7;font-size:9px}.research-kpis b{margin-top:5px;color:#344358;font-size:13px}.research-kpis .passed{border-color:#bde8d9;background:#effaf6}.research-kpis .passed b{color:#16805d}
-.factor-result-table{overflow:hidden;border:1px solid #e2e8ef;border-radius:10px}.factor-result-row{display:grid;grid-template-columns:1.2fr .7fr .7fr .7fr .65fr .65fr .65fr .9fr .7fr 1.3fr;align-items:center;min-width:1120px;padding:10px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px}.factor-result-row:first-child{border-top:0}.factor-result-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}.factor-result-row>b{color:#334359}.factor-result-row small{color:#8793a3}.positive{color:#16805d!important}.negative{color:#c65050!important}
+.factor-result-table{overflow:hidden;border:1px solid #e2e8ef;border-radius:10px}.factor-result-row{display:grid;grid-template-columns:1.2fr .7fr .7fr .8fr 1fr .6fr .65fr .65fr .9fr .7fr 1.3fr;align-items:center;min-width:1240px;padding:10px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px}.factor-result-row:first-child{border-top:0}.factor-result-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}.factor-result-row>b{color:#334359}.factor-result-row small{color:#8793a3}.positive{color:#16805d!important}.negative{color:#c65050!important}
 .screen-status{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:12px;background:#f8e9e9;color:#b74646;font-style:normal;font-size:8px}.screen-status.passed{background:#e4f6ef;color:#14785a}
 .correlation-section{margin-top:22px}.correlation-section h3{margin:0;font-size:14px}.correlation-section p{margin:4px 0 11px;color:#8a96a7;font-size:9px}.correlation-scroll{overflow:auto;border:1px solid #e1e7ee;border-radius:9px}.correlation-grid{display:grid;min-width:max-content}.correlation-grid>*{height:38px;display:grid;place-items:center;padding:0 7px;border-right:1px solid #edf0f4;border-bottom:1px solid #edf0f4;font-size:8px}.correlation-grid>b{overflow:hidden;background:#f7f9fb;color:#69778a;text-overflow:ellipsis;white-space:nowrap}.correlation-grid>span{font-variant-numeric:tabular-nums}
 .research-empty{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}.research-empty span{color:#8b97a7;font-size:10px}

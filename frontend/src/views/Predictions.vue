@@ -5,6 +5,9 @@ import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import StatusBadge from '../components/StatusBadge.vue'
 import SectionTabs from '../components/SectionTabs.vue'
+import GuideCard from '../components/GuideCard.vue'
+import VerdictBadge from '../components/VerdictBadge.vue'
+import {rankIcVerdict,rocAucVerdict} from '../verdict'
 import {backtestTabs} from '../sections'
 import {Download,LoaderCircle,Play,RefreshCw,Sparkles} from 'lucide-vue-next'
 
@@ -18,6 +21,7 @@ const notice=ref('')
 const job=ref<any>(null)
 const longRunning=ref(false)
 const form=ref({name:'批量因子预测',model_id:'',feature_snapshot_id:''})
+const selectedModel=computed(()=>models.value.find(item=>item.id===form.value.model_id))
 
 const progressStage=computed(()=>{
   if(job.value?.status==='queued')return '等待本地计算节点接单'
@@ -72,18 +76,28 @@ onMounted(load)
 <template>
   <section>
     <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
+    <GuideCard
+      :icon="Sparkles"
+      title="这一步在干什么"
+      text="让训练好的模型给一份新因子表打分：产出每只股票的上涨概率，可下载成文件，也可以直接拿去做组合。"
+    />
     <div class="page-intro">
-      <div><h2>批量预测中心</h2><p>注册模型 × 不可变特征快照 → 可审计预测产物</p></div>
+      <div><h2>批量预测中心</h2><p>模型 × 因子表 → 可审计的预测产物</p></div>
       <button class="secondary" @click="load"><RefreshCw :size="16"/>刷新</button>
     </div>
     <p v-if="error" class="error-box">{{error}}</p>
     <p v-if="notice" class="notice-box">{{notice}}</p>
     <article class="panel form-card">
-      <div class="form-heading"><div class="feature-icon purple-bg"><Sparkles :size="23"/></div><div><h2>创建预测任务</h2><p>Worker 会检查模型所需特征是否全部存在。</p></div></div>
+      <div class="form-heading"><div class="feature-icon purple-bg"><Sparkles :size="23"/></div><div><h2>创建预测任务</h2><p>平台会先检查模型需要的因子是否都在快照里。</p></div></div>
       <div class="form-grid">
         <div class="field full"><label>任务名称</label><input v-model="form.name"/></div>
-        <div class="field"><label>模型版本</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}}</option></select><small>{{models.length?'只列出已具备样本外预测产物的模型。':'当前项目还没有可批量推理的模型，请先完成训练实验。'}}</small></div>
-        <div class="field"><label>特征快照</label><select v-model="form.feature_snapshot_id"><option v-for="snapshot in snapshots" :key="snapshot.id" :value="snapshot.id">{{snapshot.name}} · {{snapshot.row_count}}行</option></select></div>
+        <div class="field"><label>模型版本</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}}</option></select><small>{{models.length?'只列出已具备样本外预测产物的模型。':'当前项目还没有可批量推理的模型，请先完成训练实验。'}}</small>
+          <div v-if="selectedModel" class="selected-model-verdict">
+            <span>预测能力 <VerdictBadge :verdict="rocAucVerdict(selectedModel.metrics?.roc_auc)"/></span>
+            <span>选股区分度 <VerdictBadge :verdict="rankIcVerdict(selectedModel.metrics?.rank_ic)"/></span>
+          </div>
+        </div>
+        <div class="field"><label>因子表（快照）</label><select v-model="form.feature_snapshot_id"><option v-for="snapshot in snapshots" :key="snapshot.id" :value="snapshot.id">{{snapshot.name}} · {{snapshot.row_count}}行</option></select></div>
       </div>
       <div v-if="job" class="job-progress">
         <div><LoaderCircle :size="17" class="spin"/><span>{{progressStage}}</span><b>{{Math.round(Number(job.progress||0))}}%</b></div>
@@ -99,8 +113,13 @@ onMounted(load)
           <span>{{row.name}}</span><span><StatusBadge :status="row.status"/></span><span>{{row.row_count||'—'}}</span><span>{{row.summary?.mean_probability??'—'}}</span>
           <span><button v-if="row.status==='succeeded'" class="text-button" @click="download(row)"><Download :size="14"/>下载 Parquet</button></span>
         </div>
-        <div v-if="!rows.length" class="empty">暂无预测任务。选择一个已登记模型和一份特征快照，即可在上方生成可审计的预测产物。</div>
+        <div v-if="!rows.length" class="empty">还没有预测任务：在上面选一个模型和一份因子表，点「启动批量预测」。</div>
       </div>
     </article>
   </section>
 </template>
+
+<style scoped>
+.selected-model-verdict{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;color:#718096;font-size:10px}
+.selected-model-verdict span{display:inline-flex;align-items:center;gap:5px}
+</style>

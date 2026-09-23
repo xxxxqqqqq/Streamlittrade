@@ -35,7 +35,7 @@ const progressStage=computed(()=>{
   if(progress.value<34)return '正在读取本地缓存中的快照与标准行情'
   if(progress.value<48)return '正在裁剪训练所需因子与可交易股票池'
   if(progress.value<62)return '正在生成未来收益标签并合并特征'
-  if(progress.value<80)return '正在清理样本并划分训练、调参与封存区'
+  if(progress.value<80)return '正在清理样本并划分训练、验证与终检区'
   if(progress.value<94)return '正在序列化不可变研究数据集'
   if(progress.value<100)return '正在上传并登记研究数据集'
   return '研究数据集构建完成'
@@ -152,9 +152,9 @@ async function submit(){
             <small v-if="formalMode">由因子研究门禁锁定。</small>
           </div>
           <div class="field"><label>训练区比例</label><input v-model.number="form.training_fraction" type="number" min="0.3" max="0.8" step="0.05" required :disabled="formalMode"/><small>{{formalMode?'由因子研究门禁锁定。':'只用于初始拟合。'}}</small></div>
-          <div class="field"><label>调参区比例</label><input v-model.number="form.tuning_fraction" type="number" min="0.1" max="0.4" step="0.05" required/><small>Purged Walk-Forward 只在此区比较模型。</small></div>
-          <div class="field"><label>调参折数</label><input v-model.number="form.tuning_folds" type="number" min="2" max="6" required/></div>
-          <div class="field"><label>最终封存区</label><input :value="`${Math.round((1-form.training_fraction-form.tuning_fraction)*100)}%`" disabled/><small>模型与参数锁定后只允许开启一次。</small></div>
+          <div class="field"><label>验证区比例</label><input v-model.number="form.tuning_fraction" type="number" min="0.1" max="0.4" step="0.05" required/><small>时间序列验证只在此区比较模型，结论可以反复比较但不能当最终表现。</small></div>
+          <div class="field"><label>验证折数</label><input v-model.number="form.tuning_folds" type="number" min="2" max="6" required/></div>
+          <div class="field"><label>终检区（🔒 一次性）</label><input :value="`${Math.round((1-form.training_fraction-form.tuning_fraction)*100)}%`" disabled/><small>这部分数据一直不看，模型与参数锁定后只允许做一次终检，结果不可改。</small></div>
           <div v-if="formalMode" class="field full">
             <label>因子研究门禁</label>
             <select v-model="form.factor_research_id" required @change="applyFactorGate">

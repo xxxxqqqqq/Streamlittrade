@@ -4,6 +4,7 @@ import {useRoute,useRouter} from 'vue-router'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import SectionTabs from '../components/SectionTabs.vue'
+import GuideCard from '../components/GuideCard.vue'
 import {backtestTabs} from '../sections'
 import {ArrowLeft,BarChart3,BrainCircuit,CheckCircle2,LoaderCircle} from 'lucide-vue-next'
 
@@ -32,15 +33,15 @@ const sealedAvailable=computed(()=>
   sealed.value?.metrics?.evaluation_scope==='final_sealed_holdout'
 )
 const sealedStatusText=computed(()=>{
-  if(sealedLoading.value)return '正在检查封存状态'
-  if(!sealed.value)return '所选模型尚未开启最终封存区'
-  if(sealed.value.status==='queued')return '最终封存评估正在排队'
-  if(sealed.value.status==='running')return '最终封存评估正在运行'
-  if(sealed.value.status==='failed')return '最终封存评估失败，请到模型详情查看原因'
-  if(sealed.value.status!=='succeeded')return `最终封存评估状态：${sealed.value.status}`
-  if(!sealed.value.artifact_uri)return '最终封存预测产物缺失'
-  if(sealed.value.metrics?.evaluation_scope!=='final_sealed_holdout')return '最终封存评估结果不完整'
-  return '最终封存区已就绪；日期和组合规则将使用封存前登记值'
+  if(sealedLoading.value)return '正在检查终检状态'
+  if(!sealed.value)return '所选模型还没有做过终检'
+  if(sealed.value.status==='queued')return '终检评估正在排队'
+  if(sealed.value.status==='running')return '终检评估正在运行'
+  if(sealed.value.status==='failed')return '终检评估失败，请到模型详情查看原因'
+  if(sealed.value.status!=='succeeded')return `终检评估状态：${sealed.value.status}`
+  if(!sealed.value.artifact_uri)return '终检预测产物缺失'
+  if(sealed.value.metrics?.evaluation_scope!=='final_sealed_holdout')return '终检评估结果不完整'
+  return '🔒 终检已就绪（每个模型只能做一次）：日期和组合规则使用终检前登记值'
 })
 const versionedMode=computed(()=>form.value.data_source==='data_version')
 const effectiveImplementation=computed(()=>selectedStrategy.value?.implementation||form.value.strategy_name)
@@ -148,15 +149,20 @@ async function submit(){
 <template>
   <section class="workflow">
     <SectionTabs :tabs="backtestTabs" label="回测段页签"/>
+    <GuideCard
+      :icon="BarChart3"
+      title="这一步在干什么"
+      text="用模型没见过的数据模拟真实买卖（T+1、整手、手续费全算），看赚不赚钱。模型回测的日期区间由平台锁定，不能挑好日子。"
+    />
     <div class="crumb"><button @click="router.push('/backtests')"><ArrowLeft :size="15"/>返回回测中心</button><span>组合级可信回测</span></div>
     <article class="panel form-card">
-      <div class="form-heading"><div class="feature-icon"><BrainCircuit v-if="modelMode" :size="23"/><BarChart3 v-else :size="23"/></div><div><h2>{{modelMode?'创建模型组合回测':'创建可复现策略回测'}}</h2><p>{{modelMode?'使用 Purged Walk-Forward 产生的样本外概率构建组合，自动锁定模型训练时的数据血缘。':'绑定不可变数据版本与策略版本，历史结果不会被后续参数修改污染。'}}</p></div></div>
+      <div class="form-heading"><div class="feature-icon"><BrainCircuit v-if="modelMode" :size="23"/><BarChart3 v-else :size="23"/></div><div><h2>{{modelMode?'创建模型组合回测':'创建可复现策略回测'}}</h2><p>{{modelMode?'用模型没见过的数据模拟真实买卖，自动锁定模型训练时的数据血缘。':'绑定不可变数据版本与策略版本，历史结果不会被后续参数修改污染。'}}</p></div></div>
       <form v-if="job?.status!=='succeeded'" @submit.prevent="submit">
         <div class="form-grid">
-          <div class="field full"><label>信号来源</label><select v-model="form.signal_source"><option value="strategy">规则策略</option><option value="model_oos" :disabled="!models.length">模型样本外预测（推荐用于模型评估）</option></select><small v-if="!models.length">当前项目还没有包含样本外预测的已训练模型。</small></div>
+          <div class="field full"><label>信号来源</label><select v-model="form.signal_source"><option value="strategy">规则策略（不用模型的备选信号）</option><option value="model_oos" :disabled="!models.length">模型预测（推荐：模型训练完就回测它）</option></select><small v-if="!models.length">当前项目还没有包含样本外预测的已训练模型。</small></div>
           <template v-if="modelMode">
-            <div class="field full"><label>已登记模型</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}} · AUC {{model.metrics?.roc_auc??'—'}}</option></select><small v-if="selectedModel">模型 {{selectedModel.id.slice(0,8)}} 的预测、数据版本和完整时间范围将写入审计血缘。</small></div>
-            <div class="field full"><label>评估区间</label><select v-model="form.prediction_scope"><option value="tuning_oos">调参区样本外回测（用于比较和调整组合规则）</option><option value="sealed_oos" :disabled="!sealedAvailable">最终封存区回测（一次性最终检验）</option></select><small>{{sealedMode?'使用封存前锁定的完整区间和组合参数，页面与服务端均禁止修改。':sealedStatusText+'；调参区必须使用完整区间，不能把结果称为最终表现。'}}</small></div>
+            <div class="field full"><label>已登记模型</label><select v-model="form.model_id"><option v-for="model in models" :key="model.id" :value="model.id">{{model.name}} · {{model.algorithm}} · {{model.stage}} · 预测能力 {{model.metrics?.roc_auc??'—'}}</option></select><small v-if="selectedModel">模型 {{selectedModel.id.slice(0,8)}} 的预测、数据版本和完整时间范围将写入审计血缘。</small></div>
+            <div class="field full"><label>评估区间</label><select v-model="form.prediction_scope"><option value="tuning_oos">验证区回测（可反复比较，用于调整组合规则）</option><option value="sealed_oos" :disabled="!sealedAvailable">终检回测（每个模型只能做一次，结果不可改）</option></select><small>{{sealedMode?'🔒 终检：使用终检前锁定的完整区间和组合参数，页面与服务端均禁止修改。':sealedStatusText+'；验证区必须使用完整区间，不能把结果称为最终表现。'}}</small></div>
             <div class="field"><label>Top-N 持仓数量</label><input v-model.number="form.top_n" type="number" min="1" max="100" :disabled="sealedMode"/></div>
             <div class="field"><label>最低入选概率</label><input v-model.number="form.minimum_probability" type="number" min="0" max="1" step="0.01" :disabled="sealedMode"/></div>
             <div class="field"><label>调仓频率（交易日）</label><input v-model.number="form.rebalance_frequency" type="number" min="1" max="60" :disabled="sealedMode"/></div>
@@ -189,13 +195,18 @@ async function submit(){
           <div class="field"><label>初始资金</label><input v-model.number="form.initial_cash" type="number" min="1000" :disabled="sealedMode"/></div>
           <div class="field"><label>开始日期</label><input v-model="form.start_date" type="date" :disabled="modelMode"/></div>
           <div class="field"><label>结束日期</label><input v-model="form.end_date" type="date" :disabled="modelMode"/></div>
+          <p v-if="modelMode" class="date-lock-note">🔒 日期区间由平台锁定，不能挑好日子（防自欺）：验证区用完整验证区间，终检用终检前登记的区间。</p>
         </div>
         <div v-if="job" class="job-progress"><div><LoaderCircle :size="17" class="spin"/><span>{{job.status==='queued'?'等待回测资源':modelMode?'正在构建模型选股组合并计算可信账本':'正在读取版本化行情并计算账本'}}</span><b>{{job.progress}}%</b></div><div class="progress-track"><i :style="{width:job.progress+'%'}"></i></div></div>
         <div v-if="longRunning" class="background-task-note">回测仍在后台运行。可以继续等待，或前往 <button type="button" class="text-button" @click="router.push('/jobs')">任务中心</button> 查看进度；离开本页不会取消任务。</div>
         <p v-if="error" class="error-box">{{error}}</p>
-        <div class="form-actions"><button type="button" class="secondary" @click="router.push('/backtests')">取消</button><button class="primary" :disabled="submitting||(modelMode?!form.model_id:versionedMode&&!form.data_version_id)"><LoaderCircle v-if="submitting" :size="16" class="spin"/><BarChart3 v-else :size="16"/>{{submitting?'正在回测':'运行回测'}}</button></div>
+        <div class="form-actions"><button type="button" class="secondary" @click="router.push('/backtests')">取消</button><button class="primary" :disabled="submitting||(modelMode?!form.model_id:versionedMode&&!form.data_version_id)"><LoaderCircle v-if="submitting" :size="16" class="spin"/><BarChart3 v-else :size="16"/>{{submitting?'正在回测':'开始回测'}}</button></div>
       </form>
-      <div v-else class="success-state"><CheckCircle2 :size="48"/><h3>组合回测已完成</h3><p>{{modelMode?'模型、OOS 预测、组合构建参数、数据血缘和资金账本均已保存。':'数据、策略版本、资金账本与质量报告均已保存。'}}</p><button class="primary" @click="router.push('/backtests/'+backtestId)">查看完整报告</button></div>
+      <div v-else class="success-state"><CheckCircle2 :size="48"/><h3>回测完成</h3><p>{{modelMode?'模型、样本外预测、选股规则、数据血缘和资金账本都已保存。':'数据、策略版本、资金账本与质量报告都已保存。'}}</p><button class="primary" @click="router.push('/backtests/'+backtestId)">查看完整报告</button></div>
     </article>
   </section>
 </template>
+
+<style scoped>
+.date-lock-note{grid-column:1/-1;margin:2px 0 0;padding:9px 12px;border:1px solid #e3e8f0;border-radius:9px;background:#f7f9fc;color:#5b6474;font-size:11px;line-height:1.6}
+</style>

@@ -42,16 +42,15 @@ test('section tabs replace the sidebar sub-entries',async({page})=>{
   }
 })
 
-test('dashboard shows the recommended next step and recent products',async({page})=>{
-  await expect(page.locator('.next-step')).toBeVisible()
-  await expect(page.getByText('下一步',{exact:true})).toBeVisible()
-  await expect(page.getByRole('heading',{name:'最近产物'})).toBeVisible()
-  await expect(page.getByRole('heading',{name:'数据新鲜度'})).toBeVisible()
-  await expect(page.getByRole('heading',{name:'任务状态'})).toBeVisible()
-  // 五段流状态条把每段最近产物摆在同一行，点击直达该段或产物详情。
-  await expect(page.locator('.flow-strip .flow-card')).toHaveCount(5)
+test('dashboard console shows the five-stage status, one next step and what needs attention',async({page})=>{
+  // 首页是控制台：五段状态条 + 唯一一个下一步 + 最近动态/需要关注两块事实。
+  await expect(page.locator('.next-step')).toContainText('下一步建议')
+  await expect(page.getByRole('heading',{name:'最近动态'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'需要关注'})).toBeVisible()
+  const stages=page.locator('.stages .stage')
+  await expect(stages).toHaveCount(5)
   for(const label of ['获取数据','因子','训练','回测','模拟盘']){
-    await expect(page.locator('.flow-strip').getByText(label,{exact:true})).toBeVisible()
+    await expect(page.locator('.stages').getByText(label,{exact:true})).toBeVisible()
   }
 })
 

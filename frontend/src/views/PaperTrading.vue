@@ -5,6 +5,7 @@ import {api} from '../api'
 import {user} from '../auth'
 import StatusBadge from '../components/StatusBadge.vue'
 import SectionTabs from '../components/SectionTabs.vue'
+import GuideCard from '../components/GuideCard.vue'
 import {paperTabs} from '../sections'
 import {Ban,Landmark,Play,RefreshCw,ShieldAlert,WalletCards} from 'lucide-vue-next'
 
@@ -16,6 +17,8 @@ const accountForm=ref({name:'A股策略模拟账户',initial_cash:1000000,max_or
 const order=ref({symbol:'600000',side:'buy',quantity:100,snapshot_price:10,trade_date:new Date().toISOString().slice(0,10),source:'manual_replay'})
 const automationForm=ref({name:'每日模型调仓',algorithm:'logistic_regression',interval_minutes:1440,top_n:5,probability_threshold:0.55,gross_exposure:0.95,enabled:false})
 const brokerForm=ref({name:'券商接口准备区',provider:'generic',environment:'sandbox',credential_secret_ref:'env:QUANT_BROKER_GENERIC_TOKEN'})
+// 空状态先给一句话和一个按钮，创建表单按需展开，避免第一屏就是一张表单。
+const showCreateForm=ref(false)
 const account=computed(()=>data.value?.account)
 const productionModels=computed(()=>models.value.filter(item=>item.stage==='production'))
 const isAdmin=computed(()=>user.value?.role==='admin')
@@ -61,9 +64,23 @@ onMounted(()=>loadAccounts().catch(e=>error.value=e.response?.data?.detail||e.me
 <template>
   <section>
     <SectionTabs :tabs="paperTabs" label="模拟盘段页签"/>
-    <div class="page-intro"><div><h2>模拟交易台</h2><p>模型信号 → 目标仓位 → 待复核订单；完全隔离，不连接券商</p></div><div class="paper-badge"><ShieldAlert :size="15"/>PAPER ONLY</div></div>
+    <GuideCard
+      :icon="WalletCards"
+      title="这一步在干什么"
+      text="模型定稿后，每个交易日收盘自动生成明天的买卖计划，纸上跟踪盈亏。规则和回测完全一致，不产生真实交易。"
+    />
+    <div class="page-intro"><div><h2>模拟交易台</h2><p>用今天的数据产生明天的交易计划，纸上跟踪盈亏；这里永远不连接券商</p></div><div class="paper-badge"><ShieldAlert :size="15"/>仅模拟盘</div></div>
     <p v-if="error" class="error-box">{{error}}</p><p v-if="notice" class="notice-box">{{notice}}</p>
-    <article v-if="!accounts.length" class="panel empty-account"><WalletCards :size="40"/><h3>创建第一个模拟账户</h3><p>使用虚拟资金验证策略、交易规则和风险限制。</p><div class="form-grid"><div class="field"><label>账户名称</label><input v-model="accountForm.name"/></div><div class="field"><label>初始虚拟资金</label><input v-model.number="accountForm.initial_cash" type="number"/></div><div class="field"><label>单笔金额上限</label><input v-model.number="accountForm.max_order_value" type="number"/></div><div class="field"><label>单票仓位上限</label><input v-model.number="accountForm.max_position_ratio" type="number" step="0.05"/></div></div><button class="primary" @click="createAccount">创建模拟账户</button></article>
+    <article v-if="!accounts.length" class="panel empty-account">
+      <i class="empty-illustration"><WalletCards :size="32"/></i>
+      <h3>还没有模拟盘账户</h3>
+      <p>绑定一个生产模型，每个交易日收盘后自动生成明天的买卖计划，纸上跟踪盈亏——不产生任何真实交易。</p>
+      <button class="primary" @click="showCreateForm=!showCreateForm">{{showCreateForm?'收起表单':'创建模拟盘账户'}}</button>
+      <div v-if="showCreateForm" class="account-create">
+        <div class="form-grid"><div class="field"><label>账户名称</label><input v-model="accountForm.name"/></div><div class="field"><label>初始虚拟资金</label><input v-model.number="accountForm.initial_cash" type="number"/></div><div class="field"><label>单笔金额上限</label><input v-model.number="accountForm.max_order_value" type="number"/></div><div class="field"><label>单票仓位上限</label><input v-model.number="accountForm.max_position_ratio" type="number" step="0.05"/></div></div>
+        <button class="primary" @click="createAccount">创建模拟账户</button>
+      </div>
+    </article>
     <template v-else>
       <div class="paper-toolbar"><select v-model="selected" @change="loadSnapshot"><option v-for="item in accounts" :key="item.id" :value="item.id">{{item.name}}</option></select><button class="secondary" @click="loadAccounts"><RefreshCw :size="15" :class="{spin:loading}"/>刷新</button><button class="secondary danger-outline" @click="freeze"><Ban :size="15"/>紧急冻结</button></div>
 
@@ -84,5 +101,13 @@ onMounted(()=>loadAccounts().catch(e=>error.value=e.response?.data?.detail||e.me
 </template>
 
 <style scoped>
-.order-ticket{max-width:520px}.panel+.panel{margin-top:14px}@media(max-width:700px){.paper-toolbar{flex-wrap:wrap}}
+.order-ticket{max-width:520px}.panel+.panel{margin-top:14px}
+.empty-account{padding:46px 24px;text-align:center}
+.empty-illustration{width:64px;height:64px;margin:0 auto;display:grid;place-items:center;border-radius:20px;background:linear-gradient(135deg,#eef0ff,#f7f5ff);color:#4f46e5;font-style:normal}
+.empty-account h3{margin:14px 0 6px;font:700 17px Manrope;color:#1a2233}
+.empty-account p{max-width:520px;margin:0 auto 16px;color:#5b6474;font-size:13px;line-height:1.7}
+.empty-account .primary{margin:0 auto}
+.account-create{max-width:760px;margin:18px auto 0;padding-top:16px;border-top:1px dashed #dfe6ef;text-align:left}
+.account-create .primary{margin:6px 0 0}
+@media(max-width:700px){.paper-toolbar{flex-wrap:wrap}}
 </style>
