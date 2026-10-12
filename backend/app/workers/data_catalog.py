@@ -53,19 +53,26 @@ def sync_data(job_id:str):
         mark_running(job);raw.status=standard.status="running";s.commit()
     try:
         frames={}
+        skipped_symbols=[]
         start,end=pd.Timestamp(payload["start_date"]).date(),pd.Timestamp(payload["end_date"]).date()
         for i,symbol in enumerate(payload["symbols"]):
-            if source.provider=="demo":
-                frames[symbol]=generate_demo_stock_data(start,end,seed=42+i)
-            elif source.provider=="akshare":
-                frames[symbol]=fetch_akshare_stock_data(
-                    symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"),
-                    adjust=str(source.configuration.get("adjust","hfq")),
-                )
-            else:
-                frames[symbol]=fetch_stock_data(symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"))
+            try:
+                if source.provider=="demo":
+                    frames[symbol]=generate_demo_stock_data(start,end,seed=42+i)
+                elif source.provider=="akshare":
+                    frames[symbol]=fetch_akshare_stock_data(
+                        symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"),
+                        adjust=str(source.configuration.get("adjust","hfq")),
+                    )
+                else:
+                    frames[symbol]=fetch_stock_data(symbol,start.strftime("%Y%m%d"),end.strftime("%Y%m%d"))
+            except Exception as exc:
+                # 单只股票无数据（次新股/已退市/代码失效）跳过并记录，不让整批同步失败
+                skipped_symbols.append({"symbol":symbol,"reason":str(exc)[:200]})
             if (i + 1) % 5 == 0 or i + 1 == len(payload["symbols"]):
                 _progress(jid,5+int(35*(i+1)/len(payload["symbols"])))
+        if not frames:
+            raise ValueError(f"所有股票均无数据: {len(skipped_symbols)} 只全部失败")
         raw_frame=pd.concat([f.assign(symbol=s,date=f.index) for s,f in frames.items()],ignore_index=True)
         raw_bytes=_parquet(raw_frame);raw_hash=hashlib.sha256(raw_bytes).hexdigest();raw_uri=upload_bytes(f"data/raw/{raw.id}/{raw_hash[:12]}.parquet",raw_bytes,"application/vnd.apache.parquet")
         _progress(jid,45)
@@ -77,7 +84,10 @@ def sync_data(job_id:str):
             job=s.get(Job,jid);r=s.get(DataVersion,raw.id);v=s.get(DataVersion,standard.id)
             r.status="ready";r.artifact_uri=raw_uri;r.content_sha256=raw_hash;r.row_count=len(raw_frame);r.quality_report={"raw_preserved":True};r.lineage={"provider":source.provider,"source_slug":source.slug,"ingested_at":datetime.now(UTC).isoformat()}
             quality={**report.to_dict(),"dynamic_universe":universe_report}
-            v.status="ready";v.artifact_uri=standard_uri;v.content_sha256=standard_hash;v.row_count=len(standard_frame);v.quality_report=quality;v.lineage={"parent_id":str(r.id),"parent_sha256":raw_hash,"transform":"canonical_market_v2","dynamic_universe":universe_report}
+            if skipped_symbols:
+                quality["warnings"]=list(quality.get("warnings") or [])+[f"{len(skipped_symbols)} 只股票无数据已跳过"]
+                quality["skipped_symbols"]=skipped_symbols
+            v.status="ready";v.artifact_uri=standard_uri;v.content_sha256=standard_hash;v.row_count=len(standard_frame);v.quality_report=quality;v.lineage={"parent_id":str(r.id),"parent_sha256":raw_hash,"transform":"canonical_market_v2","dynamic_universe":universe_report,"skipped_symbols":skipped_symbols}
             job.status="succeeded";job.progress=100;job.result_summary={"raw_version_id":str(r.id),"standard_version_id":str(v.id),"rows":len(standard_frame),"content_sha256":standard_hash};mark_finished(job);s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(DataVersion,raw.id),(DataVersion,standard.id)]);raise
