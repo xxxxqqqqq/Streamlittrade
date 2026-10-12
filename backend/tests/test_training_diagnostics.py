@@ -47,14 +47,23 @@ def _synthetic_frame(*, symbols: int = 4, days: int = 240, seed: int = 11) -> pd
     return frame
 
 
-def _first_fold_features(frame: pd.DataFrame):
+def _tuning_folds_data(frame: pd.DataFrame) -> list[dict]:
+    """按 `train_experiment` 的同样口径预算全部调参折及其截面 rank 特征。"""
+
     split = three_way_research_split(
         frame["date"], training_fraction=0.55, tuning_fraction=0.25,
         n_tuning_splits=3, purge_days=HORIZON, embargo_days=HORIZON,
     )
-    fold = split.tuning_folds[0]
-    train, test = frame.iloc[fold.train_index], frame.iloc[fold.test_index]
-    return fold, train, test, cross_sectional_rank_features(train, FEATURES), cross_sectional_rank_features(test, FEATURES)
+    return [
+        {
+            "fold": fold,
+            "train": frame.iloc[fold.train_index],
+            "test": frame.iloc[fold.test_index],
+            "train_features": cross_sectional_rank_features(frame.iloc[fold.train_index], FEATURES),
+            "test_features": cross_sectional_rank_features(frame.iloc[fold.test_index], FEATURES),
+        }
+        for fold in split.tuning_folds
+    ]
 
 
 def _run_train_experiment(*, frame: pd.DataFrame, parameters: dict, algorithm: str = "hist_gradient_boosting"):
@@ -132,23 +141,32 @@ class GridSearchContractTests(unittest.TestCase):
             research._estimator_parameters({"max_iter": 5, "grid_search": True}), {"max_iter": 5}
         )
 
-    def test_grid_search_selects_the_best_candidate_by_fold_rank_ic(self):
+    def test_grid_search_selects_the_best_candidate_by_mean_fold_rank_ic(self):
         frame = _synthetic_frame(days=200)
-        fold, train, test, train_features, test_features = _first_fold_features(frame)
+        folds_data = _tuning_folds_data(frame)
 
         resolved, report = research._resolve_training_parameters(
             "hist_gradient_boosting",
             {"max_iter": 30, "max_depth": 4, "learning_rate": 0.05, "grid_search": True},
-            train_frame=train, train_features=train_features,
-            test_frame=test, test_features=test_features, fold=fold, horizon=HORIZON,
+            folds_data=folds_data, horizon=HORIZON,
         )
 
         self.assertEqual(len(report["candidates"]), 9)
-        self.assertEqual(report["selection_metric"], "tuning_fold_rank_ic")
-        self.assertEqual(report["selection_fold"]["fold"], fold.fold)
+        self.assertEqual(report["kind"], "hgb_learning_rate_leaf_nodes_grid_v2")
+        self.assertEqual(report["selection_metric"], "tuning_folds_mean_rank_ic")
+        # 选参依据必须是全部调参折，而不是单折
+        self.assertEqual(
+            [item["fold"] for item in report["selection_folds"]],
+            [fold_data["fold"].fold for fold_data in folds_data],
+        )
+        self.assertEqual(len(folds_data) > 1, True)
         self.assertEqual(report["grid"], {"learning_rate": [0.03, 0.05, 0.1], "max_leaf_nodes": [15, 31, 63]})
         observed = [item["rank_ic"] for item in report["candidates"]]
         self.assertTrue(all(value is not None for value in observed))
+        for candidate in report["candidates"]:
+            self.assertEqual(len(candidate["fold_rank_ics"]), len(folds_data))
+            per_fold = [value for value in candidate["fold_rank_ics"] if value is not None]
+            self.assertAlmostEqual(candidate["rank_ic"], round(float(np.mean(per_fold)), 6), places=6)
         selected = report["selected"]
         self.assertEqual(selected["rank_ic"], max(observed))
         self.assertEqual(selected["parameters"], report["candidates"][observed.index(max(observed))]["parameters"])
@@ -160,7 +178,7 @@ class GridSearchContractTests(unittest.TestCase):
 
     def test_grid_search_never_recomputes_the_feature_matrix(self):
         frame = _synthetic_frame(days=200)
-        fold, train, test, train_features, test_features = _first_fold_features(frame)
+        folds_data = _tuning_folds_data(frame)
 
         with mock.patch.object(
             research, "cross_sectional_rank_features",
@@ -169,8 +187,7 @@ class GridSearchContractTests(unittest.TestCase):
             _, report = research._resolve_training_parameters(
                 "hist_gradient_boosting",
                 {"max_iter": 20, "max_depth": 3, "grid_search": True},
-                train_frame=train, train_features=train_features,
-                test_frame=test, test_features=test_features, fold=fold, horizon=HORIZON,
+                folds_data=folds_data, horizon=HORIZON,
             )
 
         self.assertEqual(len(report["candidates"]), 9)
@@ -273,7 +290,9 @@ class TrainingSummaryContractTests(unittest.TestCase):
 
         grid = experiment.reproducibility["grid_search"]
         self.assertEqual(len(grid["candidates"]), 9)
-        self.assertEqual(grid["selection_metric"], "tuning_fold_rank_ic")
+        self.assertEqual(grid["kind"], "hgb_learning_rate_leaf_nodes_grid_v2")
+        self.assertEqual(grid["selection_metric"], "tuning_folds_mean_rank_ic")
+        self.assertEqual(len(grid["selection_folds"]), 3)
         selected = grid["selected"]["parameters"]
         self.assertIn(selected["learning_rate"], research.HGB_GRID_LEARNING_RATES)
         self.assertIn(selected["max_leaf_nodes"], research.HGB_GRID_MAX_LEAF_NODES)

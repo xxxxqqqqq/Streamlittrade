@@ -103,46 +103,49 @@ def _cross_sectional_rank_ic(dates, scores, forward_returns):
 def _run_hgb_grid_search(
     parameters: dict,
     *,
-    train_frame: pd.DataFrame,
-    train_features: pd.DataFrame,
-    test_frame: pd.DataFrame,
-    test_features: pd.DataFrame,
-    fold,
+    folds_data: list[dict],
     horizon: int,
     check_cancel=None,
 ) -> dict:
-    """在首个调参折上搜索最优 HGB 超参，并返回可审计的候选结果。
+    """在全部调参折上搜索最优 HGB 超参，按各折 OOS RankIC 的均值选优。
 
-    特征矩阵由调用方传入并在后续折训练中复用，避免为每个候选重复计算截面
-    rank；选择依据是该折样本外预测概率与未来收益的日截面 Spearman 均值。
+    单折选参会过拟合那一折（生产实测：单折选出的参数回测表现最差），
+    多折平均是更稳健的泛化代理。特征矩阵由调用方预算一次，网格与后续
+    正式折训练共用，不为每个候选重复计算。
     """
 
-    weights = _date_equal_weights(train_frame["date"])
     candidates = []
     for candidate in _hgb_grid_candidates(parameters):
-        if check_cancel:
-            check_cancel()
-        model = fit_time_ordered_sigmoid(
-            lambda candidate=candidate: _build_estimator("hist_gradient_boosting", candidate),
-            train_features, train_frame["label"], train_frame["date"],
-            purge_days=horizon, sample_weight=weights,
-        )
-        probability = model.predict_proba(test_features)[:, 1]
+        fold_ics: list[float | None] = []
+        for fold_data in folds_data:
+            if check_cancel:
+                check_cancel()
+            train_frame = fold_data["train"]
+            model = fit_time_ordered_sigmoid(
+                lambda candidate=candidate: _build_estimator("hist_gradient_boosting", candidate),
+                fold_data["train_features"], train_frame["label"], train_frame["date"],
+                purge_days=horizon, sample_weight=_date_equal_weights(train_frame["date"]),
+            )
+            probability = model.predict_proba(fold_data["test_features"])[:, 1]
+            test_frame = fold_data["test"]
+            fold_ics.append(
+                _cross_sectional_rank_ic(test_frame["date"], probability, test_frame["future_return"])
+            )
+        observed = [value for value in fold_ics if value is not None]
         candidates.append({
             "parameters": candidate,
-            "rank_ic": _cross_sectional_rank_ic(
-                test_frame["date"], probability, test_frame["future_return"]
-            ),
+            "fold_rank_ics": fold_ics,
+            "rank_ic": round(float(np.mean(observed)), 6) if observed else None,
         })
     # max 返回首个最大值，因此并列时按网格声明顺序确定性取胜。
     selected = max(candidates, key=lambda item: item["rank_ic"] if item["rank_ic"] is not None else float("-inf"))
     return {
-        "kind": "hgb_learning_rate_leaf_nodes_grid_v1",
-        "selection_metric": "tuning_fold_rank_ic",
-        "selection_fold": {
-            "fold": fold.fold, "test_start": fold.test_start, "test_end": fold.test_end,
-            "test_rows": int(len(test_frame)),
-        },
+        "kind": "hgb_learning_rate_leaf_nodes_grid_v2",
+        "selection_metric": "tuning_folds_mean_rank_ic",
+        "selection_folds": [
+            {"fold": fd["fold"].fold, "test_start": fd["fold"].test_start, "test_end": fd["fold"].test_end}
+            for fd in folds_data
+        ],
         "grid": {
             "learning_rate": list(HGB_GRID_LEARNING_RATES),
             "max_leaf_nodes": list(HGB_GRID_MAX_LEAF_NODES),
@@ -461,25 +464,27 @@ def train_experiment(job_id: str) -> dict:
             embargo_days=horizon,
         )
         folds = list(split.tuning_folds)
-        # 网格搜索只在首个调参折上做一次，并复用该折训练用的截面 rank 特征，
+        # 预算全部折的截面 rank 特征：网格搜索（多折选参）与正式折训练共用，
         # 避免为每个候选重复计算特征矩阵。
-        first_fold = folds[0]
-        first_train, first_test = frame.iloc[first_fold.train_index], frame.iloc[first_fold.test_index]
-        first_train_features = cross_sectional_rank_features(first_train, feature_columns)
-        first_test_features = cross_sectional_rank_features(first_test, feature_columns)
+        folds_data = [
+            {
+                "fold": fold,
+                "train": frame.iloc[fold.train_index],
+                "test": frame.iloc[fold.test_index],
+                "train_features": cross_sectional_rank_features(frame.iloc[fold.train_index], feature_columns),
+                "test_features": cross_sectional_rank_features(frame.iloc[fold.test_index], feature_columns),
+            }
+            for fold in folds
+        ]
         params, grid_search = _resolve_training_parameters(
-            algorithm, params,
-            train_frame=first_train, train_features=first_train_features,
-            test_frame=first_test, test_features=first_test_features,
-            fold=first_fold, horizon=horizon,
+            algorithm, params, folds_data=folds_data, horizon=horizon,
             check_cancel=lambda: _check_cancel(jid),
         )
         fold_metrics, prediction_frames = [], []
-        for index, fold in enumerate(folds):
+        for index, fold_data in enumerate(folds_data):
             _check_cancel(jid)
-            train, test = frame.iloc[fold.train_index], frame.iloc[fold.test_index]
-            train_features = first_train_features if index == 0 else cross_sectional_rank_features(train, feature_columns)
-            test_features = first_test_features if index == 0 else cross_sectional_rank_features(test, feature_columns)
+            train, test = fold_data["train"], fold_data["test"]
+            train_features, test_features = fold_data["train_features"], fold_data["test_features"]
             model = fit_time_ordered_sigmoid(
                 lambda: _build_estimator(algorithm, params),
                 train_features, train["label"], train["date"], purge_days=horizon,
@@ -488,6 +493,7 @@ def train_experiment(job_id: str) -> dict:
             pred, prob = model.predict(test_features), model.predict_proba(test_features)[:, 1]
             raw_prob = model.raw_predict_proba(test_features)[:, 1]
             fold_calibration = probability_diagnostics(test.label, prob, raw_probability=raw_prob)
+            fold = fold_data["fold"]
             fold_metrics.append({
                 "fold": fold.fold, "train_start": fold.train_start, "train_end": fold.train_end,
                 "test_start": fold.test_start, "test_end": fold.test_end,
