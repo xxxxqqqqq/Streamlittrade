@@ -119,7 +119,7 @@ async def list_datasets(session:AsyncSession=Depends(get_db_session),context:Pro
             "job_id": item.job_id, "feature_snapshot_id": item.feature_snapshot_id,
             "factor_research_id": item.factor_research_id, "specification": item.specification,
             "row_count": item.row_count, "feature_count": item.feature_count,
-            "artifact_uri": item.artifact_uri, "metadata_snapshot": None,
+            "artifact_uri": item.artifact_uri, "metadata_snapshot": item.metadata_snapshot,
             "error_message": item.error_message,
         }
         for item in items

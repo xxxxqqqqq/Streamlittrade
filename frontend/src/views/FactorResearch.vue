@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,ref} from 'vue'
 import {useRoute} from 'vue-router'
-import {Activity,CheckCircle2,Filter,FlaskConical,RefreshCw,XCircle} from 'lucide-vue-next'
+import {Activity,CheckCircle2,Filter,FlaskConical,GitMerge,RefreshCw,XCircle} from 'lucide-vue-next'
 import {api} from '../api'
 import {pollJobUntilTerminal} from '../jobPolling'
 import SectionTabs from '../components/SectionTabs.vue'
@@ -35,12 +35,18 @@ const selectedRun=computed(()=>runs.value.find(item=>item.id===selectedRunId.val
 const factorRows=computed(()=>Object.entries(selectedRun.value?.metrics?.factors||{}).map(([slug,metrics])=>({slug,...metrics as any})))
 const factorSlugs=computed(()=>factorRows.value.map(item=>item.slug))
 // 去冗余结果：被合并的因子写明和谁高度相关，用户不用自己去相关性矩阵里找。
+const dedup=computed<any>(()=>selectedRun.value?.metrics?.screening?.dedup||null)
 const dedupNotes=computed<Record<string,string>>(()=>{
   const notes:Record<string,string>={}
-  for(const [slug,keeper] of Object.entries(selectedRun.value?.metrics?.screening?.dedup?.dropped||{}))notes[slug]=String(keeper)
+  for(const [slug,keeper] of Object.entries(dedup.value?.dropped||{}))notes[slug]=String(keeper)
   return notes
 })
-const mergedNotes=computed(()=>Object.entries(dedupNotes.value).map(([slug,keeper])=>`${slug} 与 ${keeper} 高度相关，已合并`))
+// 说明条文案里的 |ρ| 阈值取后端登记值，改阈值时页面跟着变，不在页面写死 0.7。
+const dedupThreshold=computed(()=>{
+  const value=Number(dedup.value?.threshold)
+  return Number.isFinite(value)?String(Number(value.toFixed(2))):'0.7'
+})
+const mergedPairs=computed(()=>Object.entries(dedupNotes.value).map(([slug,keeper])=>({slug,keeper})))
 const selectedCount=computed(()=>selectedRun.value?.selected_feature_slugs?.length||0)
 function rowSummary(row:any){
   const reasons=(row.reasons||[]) as string[]
@@ -163,6 +169,15 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
           <div><small>未读取区域（验证区 + 终检区）</small><b>{{selectedRun.metrics.research_protocol?.training_boundary}} → {{selectedRun.metrics.full_date_max}}</b></div>
         </div>
 
+        <div v-if="dedup" class="dedup-strip">
+          <GitMerge :size="16"/>
+          <div>
+            <b>去冗余合并</b>
+            <p v-for="pair in mergedPairs" :key="pair.slug">{{pair.slug}} 与 {{pair.keeper}} 高度相关（|ρ| > {{dedupThreshold}}），已并入 {{pair.keeper}}</p>
+            <p v-if="!mergedPairs.length">本次没有被合并的因子：通过筛选的因子两两相关性都在阈值内。</p>
+          </div>
+        </div>
+
         <div class="factor-result-table">
           <div class="factor-result-row head">
             <span>因子</span><span>筛选</span><span>覆盖率</span><span>选股区分度（Rank IC）</span><span>判断</span>
@@ -185,8 +200,6 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 
         <p class="threshold-note">
           ⓘ 判断口径：区分度 |Rank IC| ≥ 0.03 且通过多重检验（BH q 值 ≤ 假发现率）才算有效；信号方向看符号，负值代表反向有效（分数越高越差）。
-          <template v-if="mergedNotes.length">高度相关因子已自动合并（去冗余）：{{mergedNotes.join('；')}}。</template>
-          <template v-else>当前没有因子因高度相关被合并。</template>
         </p>
 
         <div v-if="factorSlugs.length" class="correlation-section">
@@ -214,6 +227,10 @@ onMounted(()=>load().catch(exception=>error.value=exception.response?.data?.deta
 
 <style scoped>
 .threshold-note{margin:14px 0 0;padding:11px 13px;border:1px solid #e3e8f0;border-radius:9px;background:#f7f9fc;color:#61708a;font-size:11px;line-height:1.7}
+.dedup-strip{display:flex;gap:10px;margin:0 0 14px;padding:11px 13px;border:1px solid #dbe6f5;border-radius:9px;background:#f7faff}
+.dedup-strip>svg{flex:none;margin-top:1px;color:#3978c8}
+.dedup-strip b{display:block;color:#3c4d63;font-size:11px}
+.dedup-strip p{margin:4px 0 0;color:#61708a;font-size:11px;line-height:1.65}
 .research-notice{display:flex;align-items:center;gap:7px;margin:14px 0;padding:10px 13px;border:1px solid #bce8d9;border-radius:8px;background:#eaf8f3;color:#157b59;font-size:11px}
 .research-create{margin:18px 0}.panel-head>svg{color:#3978c8}
 .research-form{display:grid;grid-template-columns:minmax(150px,1fr) minmax(270px,1.6fr) repeat(8,minmax(112px,.72fr)) minmax(172px,auto);gap:10px;align-items:end}.research-form .field{min-width:0;margin:0}.research-form .field>label{white-space:nowrap}

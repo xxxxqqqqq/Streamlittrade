@@ -10,8 +10,9 @@ import SectionTabs from '../components/SectionTabs.vue'
 import GuideCard from '../components/GuideCard.vue'
 import VerdictBadge from '../components/VerdictBadge.vue'
 import {type Verdict,icDecayVerdict,rankIcVerdict,rocAucVerdict} from '../verdict'
+import {labelModeLabel,selectionMetricLabel} from '../labels'
 import {trainingTabs} from '../sections'
-import {ArrowLeft,Boxes,CalendarDays,Database,GitBranch,RotateCcw,ShieldCheck,Sparkles} from 'lucide-vue-next'
+import {ArrowLeft,Boxes,CalendarDays,Database,GitBranch,Grid3x3,RotateCcw,ShieldCheck,Sparkles} from 'lucide-vue-next'
 
 const route=useRoute(),router=useRouter(),model=ref<any>(null),sealed=ref<any>(null),loading=ref(true),error=ref('')
 const reason=ref('已检查样本外指标、时间隔离和经济指标'),changing=ref(false)
@@ -33,6 +34,39 @@ const researchSplit=computed(()=>metrics.value.research_split||{})
 const featureCount=computed(()=>reproducibility.value.features?.length||importance.value.length||0)
 const horizon=computed(()=>reproducibility.value.dataset?.horizon??null)
 const datasetName=computed(()=>reproducibility.value.dataset?.name||'训练数据')
+// 标签口径：这次训练学的是哪种"答案"。旧数据集没记 label_mode 就不显示。
+const labelMode=computed(()=>labelModeLabel(reproducibility.value.label_mode||reproducibility.value.dataset?.label_mode))
+// 网格搜索留档：只有真的跑过网格的模型才有 grid_search，其他模型不出现这张卡。
+const gridSearch=computed<any>(()=>{
+  const value=reproducibility.value.grid_search,candidates=Array.isArray(value?.candidates)?value.candidates:[]
+  return candidates.length&&candidates[0]?.parameters?value:null
+})
+// 候选表只列网格扫过的维度（learning_rate / max_leaf_nodes）；旧记录没有 grid
+// 声明时退化成"逐候选比较参数差异"。
+const gridKeys=computed<string[]>(()=>{
+  const declared=Object.keys(gridSearch.value?.grid||{})
+  if(declared.length)return declared
+  const candidates=gridSearch.value?.candidates||[],base=candidates[0]?.parameters||{}
+  return Object.keys(base).filter(key=>candidates.some((item:any)=>String(item.parameters?.[key])!==String(base[key])))
+})
+const gridFolds=computed<any[]>(()=>gridSearch.value?.selection_folds||[])
+const gridFoldCount=computed(()=>gridFolds.value.length||gridSearch.value?.candidates?.[0]?.fold_rank_ics?.length||0)
+// 选中行：先按参数完全一致匹配后端登记的选中参数，匹配不到再退化成均值最高的一组。
+const gridSelectedIndex=computed(()=>{
+  const candidates=gridSearch.value?.candidates||[],target=JSON.stringify(gridSearch.value?.selected?.parameters)
+  const matched=candidates.findIndex((item:any)=>JSON.stringify(item.parameters)===target)
+  if(matched>=0)return matched
+  return candidates.reduce((best:number,item:any,index:number)=>typeof item.rank_ic==='number'&&(best<0||item.rank_ic>Number(candidates[best].rank_ic))?index:best,-1)
+})
+const gridColumns=computed(()=>{
+  const folds=gridFoldCount.value?` repeat(${gridFoldCount.value},84px)`:''
+  return `repeat(${Math.max(gridKeys.value.length,1)},minmax(0,1fr))${folds} 96px 104px`
+})
+const gridSelectionNote=computed(()=>`按${selectionMetricLabel(gridSearch.value?.selection_metric)||'全部调参折的 OOS RankIC 均值'}选优`)
+function foldTitle(index:number){
+  const fold=gridFolds.value[index]
+  return fold?`第 ${fold.fold} 折 · ${range(fold.test_start,fold.test_end)}`:`第 ${index+1} 折`
+}
 function range(start?:string,end?:string){return start&&end?`${start} ~ ${end}`:'—'}
 interface MetricCard{label:string;value:number|null|undefined;mode?:'rate'|'ratio';digits?:number;tone?:boolean;verdict?:Verdict|null}
 const metricCards=computed<MetricCard[]>(()=>[
@@ -88,6 +122,7 @@ async function openSealed(){
           <span>学习区间（旧数据）：<b>{{range(researchSplit.training?.start,researchSplit.training?.end)}}</b></span>
           <span>打分区间（模型没见过）：<b>{{range(researchSplit.tuning?.start,researchSplit.tuning?.end)}}</b></span>
           <span>{{sealed?.status==='succeeded'?'终检已完成（每个模型只能做一次）':'终检区间仍锁定（一次性，未使用）'}}</span>
+          <span v-if="labelMode">{{labelMode}}</span>
         </div>
       </div>
       <div class="result-grid"><article class="panel metric-result" v-for="card in metricCards" :key="card.label"><small>{{card.label}}</small><MetricValue :value="card.value" :mode="card.mode" :digits="card.digits" :tone="card.tone"/><VerdictBadge v-if="card.verdict" :verdict="card.verdict"/></article></div>
@@ -103,6 +138,27 @@ async function openSealed(){
         <article class="panel"><div class="panel-head"><div><h3>批量推理</h3><p>使用任意兼容特征快照生成可审计 Parquet</p></div></div><button class="primary" @click="router.push({path:'/predictions',query:{model_id:model.id}})"><Sparkles :size="15"/>创建预测任务</button></article>
       </div>
       <article class="panel"><div class="panel-head"><div><h3>验证区各折样本外结果</h3><p>只用于选参数，不能代表终检结果</p></div></div><div class="artifact" v-for="fold in metrics.folds||[]" :key="fold.fold"><code>Fold {{fold.fold}} · {{fold.test_start}} → {{fold.test_end}} · AUC {{fold.roc_auc}} · Balanced Acc {{fold.balanced_accuracy}}</code></div></article>
+      <article v-if="gridSearch" class="panel grid-search-panel">
+        <div class="panel-head"><div><h3>网格搜索（超参数是怎么选的）</h3><p>{{gridSelectionNote}}；高亮的一行就是最终拿去训练的这组参数。</p></div><Grid3x3 :size="18"/></div>
+        <div class="config-strip">
+          <span v-for="(value,key) in gridSearch.selected?.parameters" :key="key">{{key}} = {{value}}</span>
+          <span>共比较 {{gridSearch.candidates.length}} 组参数 · {{gridFoldCount}} 折调参</span>
+        </div>
+        <div class="grid-search-table">
+          <div class="grid-search-row head" :style="{gridTemplateColumns:gridColumns}">
+            <span v-for="key in gridKeys" :key="key">{{key}}</span>
+            <span v-for="index in gridFoldCount" :key="index" :title="foldTitle(index-1)">第 {{index}} 折</span>
+            <span>各折均值</span><span>判断</span>
+          </div>
+          <div v-for="(candidate,index) in gridSearch.candidates" :key="index" class="grid-search-row" :class="{selected:index===gridSelectedIndex}" :style="{gridTemplateColumns:gridColumns}">
+            <span v-for="key in gridKeys" :key="key">{{candidate.parameters?.[key]}}</span>
+            <span v-for="(value,fold) in candidate.fold_rank_ics" :key="fold">{{typeof value==='number'?value.toFixed(4):'—'}}</span>
+            <b><MetricValue :value="candidate.rank_ic" mode="ratio" :digits="4"/></b>
+            <span class="grid-search-verdict"><VerdictBadge :verdict="rankIcVerdict(candidate.rank_ic)"/><i v-if="index===gridSelectedIndex" class="pick">已选</i></span>
+          </div>
+        </div>
+        <p class="grid-search-note">每一折的 Rank IC 都是该折样本外的区分度；选参只在验证区调参折上比较，终检区始终没有参与。</p>
+      </article>
       <p v-if="error" class="error-box">{{error}}</p>
       <article v-if="user?.role==='admin'" class="panel lifecycle"><div><h3>模型生命周期审批</h3><p>升级、归档与回滚操作都会写入审计日志。</p></div><input v-model="reason" minlength="3"/><div class="row-actions"><button v-if="model.stage==='candidate'" class="primary" :disabled="changing" @click="changeStage('validated')">通过验证</button><button v-if="model.stage==='validated'" class="primary" :disabled="changing" @click="changeStage('production')">发布生产</button><button v-if="model.stage==='archived'" class="primary" :disabled="changing" @click="rollback"><RotateCcw :size="15"/>回滚为生产</button><button v-if="model.stage!=='archived'" class="secondary" :disabled="changing" @click="changeStage('archived')">归档</button></div></article>
     </template>
@@ -117,5 +173,16 @@ async function openSealed(){
 .brief-ranges{display:flex;flex-wrap:wrap;gap:16px;margin-top:8px;color:#718096;font-size:11px}
 .brief-ranges b{color:#33455c}
 .metric-result .verdict-badge{margin-top:7px}
+.grid-search-panel{margin-top:15px}
+.grid-search-panel .panel-head>svg{color:#3978c8}
+.grid-search-table{overflow-x:auto;border:1px solid #e2e8ef;border-radius:10px}
+.grid-search-row{display:grid;align-items:center;min-width:640px;padding:9px 12px;border-top:1px solid #edf0f4;color:#526075;font-size:10px;font-variant-numeric:tabular-nums}
+.grid-search-row:first-child{border-top:0}
+.grid-search-row.head{background:#f6f8fb;color:#8793a3;font-size:9px;font-weight:700}
+.grid-search-row.selected{background:#f2f7ff;box-shadow:inset 3px 0 0 #1768d7}
+.grid-search-row.selected span,.grid-search-row.selected b{color:#1f3b63}
+.grid-search-verdict{display:flex;align-items:center;gap:6px}
+.grid-search-verdict .pick{padding:2px 6px;border-radius:99px;background:#e4f8f1;color:#0f7a58;font-size:9px;font-style:normal;font-weight:700;white-space:nowrap}
+.grid-search-note{margin:10px 0 0;color:#8b97a7;font-size:10px;line-height:1.6}
 @media(max-width:720px){.brief-ranges{flex-direction:column;gap:6px}}
 </style>
