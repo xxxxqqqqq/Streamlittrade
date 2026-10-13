@@ -206,6 +206,7 @@ function jobDetail(job:any){
   switch(job.kind){
     case 'data_sync':return summary.rows?`同步 ${summary.rows} 行行情`:'行情已入库'
     case 'feature_materialize':return summary.rows?`物化 ${summary.rows} 行 × ${(summary.features||[]).length} 个因子`:'因子表已生成'
+    case 'fundamental_enrich':return summary.rows?`对齐 ${summary.rows} 行基本面行情`:'基本面已入库'
     case 'factor_research':return `${summary.factor_count??0} 个因子参与检验，通过 ${(summary.selected||[]).length} 个`
     case 'dataset':return summary.rows?`生成 ${summary.rows} 行训练样本`:'训练表格已生成'
     case 'training':return summary.model_id?'模型已登记到模型仓库':'训练完成，等待登记模型'

@@ -42,7 +42,8 @@ class FeatureCreate(BaseModel):
         "intraday_return","close_location","upper_shadow","lower_shadow","price_efficiency",
         "return_kurtosis","up_day_ratio","max_daily_return","min_daily_return",
         "volume_volatility","volume_momentum",
-        "ep","bp","sp","cfp","turnover_level"
+        "ep","bp","sp","cfp","turnover_level",
+        "roe_ttm","gross_margin","revenue_yoy","profit_yoy","cfo_quality","accruals"
     ]
     parameters:dict[str,Any]=Field(default_factory=dict);description:str=""
     @model_validator(mode="after")
@@ -58,6 +59,9 @@ class FactorLibraryItem(BaseModel):
     parameters:dict[str,Any];source:str;reference_url:str
 class MaterializeCreate(BaseModel):
     name:str=Field(min_length=2,max_length=120);data_version_id:UUID;feature_definition_ids:list[UUID]=Field(min_length=1,max_length=250)
+    _formal_name=field_validator("name")(reject_corrupted_display_name)
+class FundamentalEnrichCreate(BaseModel):
+    name:str=Field(default="基本面 PIT 增强数据",min_length=2,max_length=120);data_version_id:UUID
     _formal_name=field_validator("name")(reject_corrupted_display_name)
 class SnapshotRead(BaseModel):
     model_config=ConfigDict(from_attributes=True);id:UUID;data_version_id:UUID;job_id:UUID|None;name:str;status:str;feature_definition_ids:list[str];artifact_uri:str|None;content_sha256:str|None;row_count:int|None;profile:dict[str,Any]|None;lineage:dict[str,Any];error_message:str|None;created_at:datetime

@@ -37,6 +37,24 @@ DataSource
 Parquet 及其 SHA256。正式回测通过 `data_version_id` 读取同一标准化行情，
 从而能够审计训练与回测是否使用同一份数据资产。
 
+标准化版本还可以选择再做一步基本面增强，把季度财报并入日频面板：
+
+```text
+Standardized DataVersion
+  → enrich_fundamentals（kind=fundamental_enrich，Heavy 队列）
+       ├─ 逐股拉取 baostock 季频 profit / growth / balance / cash_flow（每股一个检查点）
+       ├─ 按 pubDate 做 merge_asof(direction="backward") 对齐到交易日
+       └─ 新 Standardized DataVersion（parent_id=源版本，transform=fundamental_pit_v1）
+  → FeatureSnapshot（roe_ttm / gross_margin / revenue_yoy / profit_yoy /
+                     cfo_quality / accruals 六个单窗口 PIT 因子）
+```
+
+- 财报严格按**公告日**（`pubDate`）对齐，绝不允许按**报告期**（`statDate`）对齐；
+  同一报告期的多次公告是多个独立事件，早期日期只能看到当时已公告的版本。
+- 只对成功取到数据的股票落检查点，中断重跑只补缺的；没有数据的股票下次重查。
+- 增强结果仍是不可变 `standardized` 资产：血缘记录父版本哈希、抓取时间与每股
+  公告日覆盖范围，质量报告记录各基本面列的覆盖率。
+
 ## 第三阶段：模型工程与策略版本（已完成）
 
 研究链路已经从单一基线扩展为可运行的模型工程闭环：

@@ -19,9 +19,17 @@ from backend.app.workers.feature_materialization import (
     materialize_partitioned_snapshot,
 )
 from backend.app.workers.lifecycle import TaskCanceled,heartbeat,mark_finished,mark_running
-from backend.app.workers.local_artifacts import cached_artifact,promote_cached_artifact,task_checkpoint_dir,worker_data_root
+from backend.app.workers.local_artifacts import atomic_json,cached_artifact,promote_cached_artifact,read_json,task_checkpoint_dir,worker_data_root
 from quant_core.validation import benjamini_hochberg, mean_significance
 from quant_core import fetch_stock_data,fetch_akshare_stock_data,generate_demo_stock_data,validate_market_dataset
+from quant_core.fundamental_data import (
+    DAILY_FUNDAMENTAL_COLUMNS,
+    PIPELINE_VERSION as FUNDAMENTAL_PIPELINE_VERSION,
+    PUB_DATE_COLUMN as FUNDAMENTAL_PUB_DATE_COLUMN,
+    baostock_quarterly_client,
+    fetch_quarterly_fundamentals,
+    fundamentals_to_daily,
+)
 
 def _progress(jid,value):
     with SyncSessionFactory() as s:
@@ -154,6 +162,216 @@ def materialize_features(job_id:str):
             job=s.get(Job,jid);item=s.get(FeatureSnapshot,snap.id);item.status="ready";item.artifact_uri=uri;item.content_sha256=digest;item.row_count=row_count;item.profile=result.profile;item.lineage={"data_version_id":str(version.id),"data_sha256":version.content_sha256,"definitions":definitions_snapshot,"pipeline":PIPELINE_VERSION,"materialization_fingerprint":fingerprint,"dynamic_universe":dict((version.lineage or {}).get("dynamic_universe") or {})};job.status="succeeded";job.progress=100;job.result_summary={"snapshot_id":str(item.id),"rows":row_count,"features":result.feature_columns,"content_sha256":digest,"resumed_partitions":result.resumed_partitions,"computed_partitions":result.computed_partitions};mark_finished(job);s.commit()
         return job.result_summary
     except Exception as exc:_fail(jid,str(exc),[(FeatureSnapshot,snap.id)]);raise
+
+
+def _fundamental_client():
+    """构造季度财务数据客户端；测试用 mock 替换这里注入假数据源。"""
+    return baostock_quarterly_client()
+
+
+def _fundamental_fingerprint(source_sha256,start_year,end_year,symbols):
+    """把不可变的源版本与取数区间绑成检查点指纹。"""
+    payload=json.dumps({
+        "pipeline":FUNDAMENTAL_PIPELINE_VERSION,
+        "source_sha256":source_sha256,
+        "start_year":int(start_year),
+        "end_year":int(end_year),
+        "symbols":list(symbols),
+    },sort_keys=True,separators=(",",":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _valid_fundamental_partition(checkpoint_dir,item):
+    """检查某只股票的季度财务分片是否仍然可用。"""
+    path=checkpoint_dir/str(item.get("file",""))
+    return (
+        path.is_file()
+        and bool(item.get("sha256"))
+        and sha256_file(path)==item["sha256"]
+    )
+
+
+def _write_fundamental_partition(checkpoint_dir,symbol,index,frame):
+    """落盘一只股票的季度财务长表，返回可续跑的清单条目。"""
+    token=hashlib.sha256(symbol.encode("utf-8")).hexdigest()[:12]
+    filename=f"symbol-{index:05d}-{token}.parquet"
+    part_path=checkpoint_dir/filename
+    temporary=part_path.with_name(f".{part_path.name}.partial")
+    frame.to_parquet(temporary,index=False)
+    temporary.replace(part_path)
+    return {
+        "file":filename,
+        "rows":int(len(frame)),
+        "sha256":sha256_file(part_path),
+        "pub_date_min":str(pd.Timestamp(frame["pub_date"].min()).date()),
+        "pub_date_max":str(pd.Timestamp(frame["pub_date"].max()).date()),
+    }
+
+
+def enrich_fundamentals(job_id:str):
+    """为标准化行情版本补上按公告日对齐的季度基本面列。
+
+    过程：读源版本 → 逐股拉取 baostock 季度财务（每股一个检查点，中断重跑只补
+    缺的）→ 按 pubDate as-of 合并进面板 → 新 standardized 版本，parent 指向源
+    版本，血缘记录 transform=f"{FUNDAMENTAL_PIPELINE_VERSION}"、抓取时间和每只
+    股票的公告日覆盖范围。只对成功取到数据的股票落检查点：没有数据的股票在重跑
+    时会重新查询，避免把一次网络抖动永久固化成“该股没有财报”。
+    """
+    jid=UUID(job_id)
+    version_id=None
+    try:
+        with SyncSessionFactory() as s:
+            job=s.get(Job,jid)
+            payload=dict(job.payload or {})
+            version=s.get(DataVersion,UUID(payload["enrich_version_id"]))
+            source=s.get(DataVersion,UUID(payload["source_version_id"]))
+            if version is None or source is None:
+                raise LookupError("基本面增强任务引用的数据版本不存在")
+            version_id=version.id
+            mark_running(job)
+            version.status="running"
+            s.commit()
+        if not source.artifact_uri:
+            raise ValueError("源标准化数据版本缺少不可变产物")
+        source_path=cached_artifact(source.artifact_uri,source.content_sha256)
+        panel=pd.read_parquet(source_path)
+        for column in ("symbol","date"):
+            if column not in panel.columns:
+                raise ValueError(f"标准化行情缺少 {column} 列")
+        collisions=[name for name in DAILY_FUNDAMENTAL_COLUMNS if name in panel.columns]
+        if collisions:
+            raise ValueError("源版本已包含基本面列，请改用未增强的标准化版本: "+", ".join(collisions))
+        panel["symbol"]=panel["symbol"].astype(str)
+        panel["date"]=pd.to_datetime(panel["date"])
+        # 同比基期在样本区间上一年，否则第一年的 revenue_yoy 会整列缺失
+        start_year=int(panel["date"].dt.year.min())-1
+        end_year=int(panel["date"].dt.year.max())
+        symbols=sorted(panel["symbol"].unique())
+        # 源哈希缺失时按产物现算，保证检查点仍然绑定同一份不可变数据
+        source_sha256=source.content_sha256 or sha256_file(source_path)
+        fingerprint=_fundamental_fingerprint(source_sha256,start_year,end_year,symbols)
+        checkpoint_dir=task_checkpoint_dir(str(version_id),fingerprint)
+        manifest_path=checkpoint_dir/"manifest.json"
+        manifest=read_json(manifest_path,{
+            "pipeline":FUNDAMENTAL_PIPELINE_VERSION,
+            "fingerprint":fingerprint,
+            "completed":{},
+            "warnings":[],
+        })
+        if manifest.get("pipeline")!=FUNDAMENTAL_PIPELINE_VERSION or manifest.get("fingerprint")!=fingerprint:
+            raise ValueError("基本面检查点清单与本次不可变任务指纹不匹配")
+        completed=dict(manifest.get("completed") or {})
+        warnings=list(manifest.get("warnings") or [])
+        client=_fundamental_client()
+        frames=[]
+        resumed=fetched=0
+        without_fundamentals=[]
+        try:
+            for index,symbol in enumerate(symbols):
+                existing=completed.get(symbol)
+                if existing and _valid_fundamental_partition(checkpoint_dir,existing):
+                    frames.append(pd.read_parquet(checkpoint_dir/str(existing["file"])))
+                    resumed+=1
+                else:
+                    try:
+                        frame=fetch_quarterly_fundamentals(
+                            [symbol],start_year,end_year,client=client
+                        )
+                    except Exception as exc:
+                        # 单只股票取数失败不拖垮整批，记警告后按缺失处理
+                        without_fundamentals.append(symbol)
+                        warnings.append(f"{symbol} 季度财务取数失败: {str(exc)[:200]}")
+                        _progress(jid,5+70*(index+1)/max(1,len(symbols)))
+                        continue
+                    if frame.empty:
+                        without_fundamentals.append(symbol)
+                        warnings.append(f"{symbol} 没有可用的季度财务数据")
+                    else:
+                        item=_write_fundamental_partition(checkpoint_dir,symbol,index,frame)
+                        completed[symbol]=item
+                        manifest["completed"]=completed
+                        manifest["warnings"]=warnings[-200:]
+                        atomic_json(manifest_path,manifest)
+                        frames.append(frame)
+                        fetched+=1
+                _progress(jid,5+70*(index+1)/max(1,len(symbols)))
+        finally:
+            # 批量逐股取数复用同一个会话，只登录一次；任务结束时统一登出
+            logout=getattr(client,"logout",None)
+            if callable(logout):
+                try:
+                    logout()
+                except Exception:
+                    warnings.append("季度财务数据源登出失败")
+        if not frames:
+            raise ValueError("所有股票都没有可用的季度财务数据")
+        fundamentals=pd.concat(frames,ignore_index=True)
+        _progress(jid,82)
+        daily=fundamentals_to_daily(fundamentals,panel[["symbol","date"]])
+        merged=panel.merge(daily,on=["symbol","date"],how="left")
+        if len(merged)!=len(panel):
+            raise ValueError("基本面合并改变了行情行数")
+        _progress(jid,88)
+        staging_dir=worker_data_root()/"staging"/str(version_id)
+        staging_dir.mkdir(parents=True,exist_ok=True)
+        output_path=staging_dir/f"{fingerprint[:24]}.parquet"
+        temporary=output_path.with_name(f".{output_path.name}.partial")
+        merged.to_parquet(temporary,index=False,compression="snappy")
+        temporary.replace(output_path)
+        digest=sha256_file(output_path)
+        uri=upload_file(f"data/standardized/{version_id}/{digest[:12]}.parquet",output_path,"application/vnd.apache.parquet")
+        promote_cached_artifact(output_path,digest)
+        aligned=pd.to_datetime(merged[FUNDAMENTAL_PUB_DATE_COLUMN])
+        coverage={name:round(float(merged[name].notna().mean()),6) for name in DAILY_FUNDAMENTAL_COLUMNS}
+        pub_date_coverage={
+            symbol:{"min":str(item.get("pub_date_min")),"max":str(item.get("pub_date_max")),"rows":int(item.get("rows",0))}
+            for symbol,item in sorted(completed.items())
+        }
+        quality={
+            "fundamentals_pipeline":FUNDAMENTAL_PIPELINE_VERSION,
+            "row_count":int(len(merged)),
+            "columns":list(DAILY_FUNDAMENTAL_COLUMNS),
+            "coverage":coverage,
+            "aligned_rows":int(aligned.notna().sum()),
+            "aligned_ratio":round(float(aligned.notna().mean()),6),
+            "pub_date_min":str(aligned.min().date()) if aligned.notna().any() else None,
+            "pub_date_max":str(aligned.max().date()) if aligned.notna().any() else None,
+            "symbols_with_fundamentals":len(frames),
+            "symbols_without_fundamentals":without_fundamentals,
+            "warnings":warnings[-200:],
+        }
+        lineage={
+            "parent_id":str(source.id),
+            "parent_sha256":source_sha256,
+            "transform":FUNDAMENTAL_PIPELINE_VERSION,
+            "alignment":"pub_date_asof_backward_v1",
+            "fetched_at":datetime.now(UTC).isoformat(),
+            "year_range":[start_year,end_year],
+            "pub_date_coverage":pub_date_coverage,
+            "symbols_without_fundamentals":without_fundamentals,
+            "resumed_symbols":resumed,
+            "fetched_symbols":fetched,
+        }
+        with SyncSessionFactory() as s:
+            job=s.get(Job,jid);item=s.get(DataVersion,version_id)
+            item.status="ready";item.artifact_uri=uri;item.content_sha256=digest
+            item.row_count=len(merged);item.quality_report=quality;item.lineage=lineage
+            job.status="succeeded";job.progress=100
+            job.result_summary={
+                "standard_version_id":str(version_id),
+                "source_version_id":str(source.id),
+                "rows":int(len(merged)),
+                "columns":list(DAILY_FUNDAMENTAL_COLUMNS),
+                "coverage":coverage,
+                "resumed_symbols":resumed,
+                "fetched_symbols":fetched,
+                "content_sha256":digest,
+            }
+            mark_finished(job);s.commit()
+        return job.result_summary
+    except Exception as exc:
+        _fail(jid,str(exc),[(DataVersion,version_id)] if version_id else ())
+        raise
 
 
 def _finite(value):

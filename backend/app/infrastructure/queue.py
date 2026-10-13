@@ -27,6 +27,7 @@ HEAVY_FUNCTIONS = frozenset(
     {
         "backend.app.workers.data_catalog.materialize_features",
         "backend.app.workers.data_catalog.research_factors",
+        "backend.app.workers.data_catalog.enrich_fundamentals",
         "backend.app.workers.research.build_dataset",
         "backend.app.workers.research.train_experiment",
         "backend.app.workers.research.evaluate_sealed_model",
@@ -96,6 +97,7 @@ def enqueue_by_kind(job_id: UUID, kind: str) -> None:
         "training": "backend.app.workers.research.train_experiment",
         "sealed_evaluation": "backend.app.workers.research.evaluate_sealed_model",
         "data_sync": "backend.app.workers.data_catalog.sync_data",
+        "fundamental_enrich": "backend.app.workers.data_catalog.enrich_fundamentals",
         "feature_materialize": "backend.app.workers.data_catalog.materialize_features",
         "factor_research": "backend.app.workers.data_catalog.research_factors",
         "paper_automation": "backend.app.workers.automation.run_paper_automation",

@@ -16,7 +16,8 @@ np = None
 pd = None
 
 
-MARKET_FIELDS = frozenset({"open", "high", "low", "close", "volume", "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover"})
+MARKET_FIELDS = frozenset({"open", "high", "low", "close", "volume", "pe_ttm", "pb_mrq", "ps_ttm", "pcf_ncf_ttm", "turnover",
+                           "roe_avg", "gross_margin", "revenue_yoy", "profit_yoy", "cfo_to_np", "liability_to_asset", "accruals"})
 EXPRESSION_FUNCTIONS = frozenset(
     {
         "abs",
@@ -85,6 +86,12 @@ BASE_FACTOR_TEMPLATES = (
     FactorTemplate("sp", "营收市值比", "valuation", "PS(TTM) 的倒数（S/P），日频估值字段直接取自数据源", 1),
     FactorTemplate("cfp", "现金流市值比", "valuation", "PCF(TTM) 的倒数（CF/P），日频估值字段直接取自数据源", 1),
     FactorTemplate("turnover_level", "换手率水平", "valuation", "日换手率（%）的 log1p，数据源日频换手率字段", 1),
+    FactorTemplate("roe_ttm", "净资产收益率", "quality", "数据源季度 ROE(平均)，按公告日对齐（PIT）", 1),
+    FactorTemplate("gross_margin", "销售毛利率", "quality", "数据源季度销售毛利率，按公告日对齐（PIT）", 1),
+    FactorTemplate("revenue_yoy", "营业收入同比", "growth", "主营营业收入同季度同比增速，按公告日对齐（PIT）", 1),
+    FactorTemplate("profit_yoy", "净利润同比", "growth", "净利润同比增长率，按公告日对齐（PIT）", 1),
+    FactorTemplate("cfo_quality", "现金流质量", "quality", "经营现金净流量/净利润，越高说明利润越有现金支撑", 1),
+    FactorTemplate("accruals", "应计利润", "quality", "应计利润的相反数：高应计代表盈利质量差（反向因子）", 1),
 )
 
 ROLLING_WINDOWS = (
@@ -94,7 +101,8 @@ ROLLING_WINDOWS = (
 )
 POINT_IN_TIME_IMPLEMENTATIONS = frozenset(
     {"amplitude", "overnight_gap", "intraday_return", "close_location", "upper_shadow", "lower_shadow",
-     "ep", "bp", "sp", "cfp", "turnover_level"}
+     "ep", "bp", "sp", "cfp", "turnover_level",
+     "roe_ttm", "gross_margin", "revenue_yoy", "profit_yoy", "cfo_quality", "accruals"}
 )
 
 
@@ -469,4 +477,21 @@ def compute_factor(group: pd.DataFrame, implementation: str, parameters: dict[st
     if implementation == "turnover_level":
         turnover = pd.to_numeric(group.get("turnover", pd.Series(np.nan, index=group.index)), errors="coerce").astype(float)
         return np.log1p(turnover.where(turnover >= 0))
+    if implementation in ("roe_ttm", "gross_margin", "revenue_yoy", "profit_yoy", "cfo_quality"):
+        # 基本面因子直接读标准化面板里按公告日（PIT）对齐好的列；缺列说明该数据
+        # 版本没有做基本面增强，返回整列空值而不是抛错，让研究仍能跑完并看到
+        # 覆盖率告警。
+        column = {
+            "roe_ttm": "roe_avg",
+            "gross_margin": "gross_margin",
+            "revenue_yoy": "revenue_yoy",
+            "profit_yoy": "profit_yoy",
+            "cfo_quality": "cfo_to_np",
+        }[implementation]
+        values = pd.to_numeric(group.get(column, pd.Series(np.nan, index=group.index)), errors="coerce").astype(float)
+        return values.replace([np.inf, -np.inf], np.nan)
+    if implementation == "accruals":
+        # 应计利润是反向因子：高应计 = 低盈利质量
+        values = pd.to_numeric(group.get("accruals", pd.Series(np.nan, index=group.index)), errors="coerce").astype(float)
+        return -values.replace([np.inf, -np.inf], np.nan)
     raise ValueError(f"Unsupported factor implementation: {implementation}")

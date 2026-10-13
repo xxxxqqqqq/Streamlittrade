@@ -18,6 +18,7 @@ from backend.app.schemas.data_catalog import *
 from backend.app.services.factors import factor_library_payload
 from backend.app.infrastructure.object_storage import download_bytes
 from backend.app.services.catalog_export import version_frame_to_csv
+from quant_core.fundamental_data import PIPELINE_VERSION as FUNDAMENTAL_PIPELINE_VERSION
 
 router=APIRouter(prefix="/data-center",tags=["data-center"],dependencies=[Depends(get_current_user)])
 
@@ -83,6 +84,18 @@ async def create_feature(body:FeatureCreate,session:AsyncSession=Depends(get_db_
 async def features(session:AsyncSession=Depends(get_db_session)):return list((await session.scalars(select(FeatureDefinition).order_by(FeatureDefinition.slug,FeatureDefinition.version.desc()))).all())
 @router.get("/factor-library",response_model=list[FactorLibraryItem])
 async def factor_library():return factor_library_payload()
+@router.post("/enrich-fundamentals",response_model=CatalogSubmission,status_code=202)
+async def enrich_fundamentals(body:FundamentalEnrichCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
+    """把季度基本面按公告日对齐后并入一份新的标准化行情版本。"""
+    version=await session.scalar(select(DataVersion).where(DataVersion.id==body.data_version_id,DataVersion.project_id==context.project.id))
+    if not version or version.layer!="standardized" or version.status!="ready":raise HTTPException(409,"ready standardized data version required")
+    if (version.lineage or {}).get("transform")==FUNDAMENTAL_PIPELINE_VERSION:raise HTTPException(409,"data version already carries point-in-time fundamentals")
+    jid,vid=uuid4(),uuid4()
+    spec={"name":body.name,"source_version_id":str(version.id),"transform":FUNDAMENTAL_PIPELINE_VERSION}
+    job=Job(id=jid,owner_id=context.user.id,project_id=context.project.id,kind="fundamental_enrich",status="queued",progress=0,payload={**spec,"enrich_version_id":str(vid)})
+    item=DataVersion(id=vid,project_id=context.project.id,source_id=version.source_id,parent_id=version.id,job_id=jid,layer="standardized",status="queued",specification=spec,lineage={"parent_id":str(version.id),"transform":FUNDAMENTAL_PIPELINE_VERSION})
+    session.add(job);await session.flush();session.add(item);add_outbox(session,job,"backend.app.workers.data_catalog.enrich_fundamentals");await session.commit()
+    return CatalogSubmission(job_id=jid,resource_id=vid)
 @router.post("/materializations",response_model=CatalogSubmission,status_code=202)
 async def materialize(body:MaterializeCreate,session:AsyncSession=Depends(get_db_session),context:ProjectContext=Depends(get_project_context)):
     version=await session.scalar(select(DataVersion).where(DataVersion.id==body.data_version_id,DataVersion.project_id==context.project.id))

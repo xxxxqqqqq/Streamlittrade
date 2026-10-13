@@ -7,12 +7,14 @@ export interface JobLike {
 
 export const JOB_KIND_LABELS:Record<string,string>={
   data_sync:'数据同步',feature_materialize:'因子快照物化',factor_research:'因子检验',
+  fundamental_enrich:'基本面增强',
   dataset:'训练数据构建',training:'模型训练',sealed_evaluation:'终检评估',
   backtest:'组合回测',prediction:'批量预测',paper_automation:'模拟盘调仓',drift_monitor:'漂移监控',
 }
 
 export const JOB_SECTION_LABELS:Record<string,string>={
   data_sync:'获取数据',feature_materialize:'获取数据',factor_research:'因子',
+  fundamental_enrich:'获取数据',
   dataset:'训练',training:'训练',sealed_evaluation:'训练',
   backtest:'回测',prediction:'回测',paper_automation:'模拟盘',drift_monitor:'平台治理',
 }
